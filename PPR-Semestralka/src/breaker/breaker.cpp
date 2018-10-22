@@ -1,4 +1,3 @@
-#include "pch.h"
 #include "../breaker.h"
 
 //V ramci vypracovani semestralni prace muzete menit pouze a jedine tento souboru od teto radky dale.
