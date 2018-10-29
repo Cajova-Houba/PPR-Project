@@ -17,7 +17,7 @@ const double F = 0.6;
 const double CR = 0.85;
 
 // dimenze reseneo problemu = delka hesla - 1
-const int D = 2;
+const int D = 1;
 
 // pocet jedincu v populaci 10*D - 100*D
 const int NP = 30 * D;
@@ -46,10 +46,10 @@ void print_block(const TBlock& block) {
 
 void print_key(const TPassword& key, const double score) {
 	int i = 0;
-	for (i = 0; i < 10; i++) {
+	for (i = 0; i < D; i++) {
 		printf("%#x ", key[i]);
 	}
-	std::cout << "\t" << score << std::endl;
+	std::cout << "\t;" << score << std::endl;
 }
 
 /*
@@ -71,6 +71,23 @@ double fitness(TPassword& individual, TBlock& encrypted, const TBlock &reference
 	}
 
 	fit = std::sqrt(fit);
+
+	return fit;
+}
+
+double fitness_high_diff(TPassword& individual, TBlock& encrypted, const TBlock &reference) {
+	double fit = 0;
+	int i = 0;
+	TBlock decrypted;
+	SJ_context context;
+
+	makeKey(&context, individual, sizeof(TPassword));
+	decrypt_block(&context, decrypted, encrypted);
+
+	for (i = 0; i < 0; i++) {
+
+	}
+
 
 	return fit;
 }
@@ -207,7 +224,7 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 	TBlock decrypted;
 	TPassword testing_key{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 	int i = 0, j=0;
-	int generation = 0;
+	int generation = GENERATIONS;
 	bool done = false;
 	TPassword population[NP] {0};
 	TPassword new_population[NP] {0};
@@ -259,19 +276,20 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 
 	}
 
-	return done;
+	//return done;
 
-	/*for (testing_key[0] = 0; testing_key[0] < 255; testing_key[0]++) {
-		for (testing_key[1] = 0; testing_key[1] < 255; testing_key[1]++) {
+	for (testing_key[0] = 0; testing_key[0] < 255; testing_key[0]++) {
+		//for (testing_key[1] = 0; testing_key[1] < 255; testing_key[1]++) {
+			print_key(testing_key, fitness(testing_key, encrypted, reference));
 			makeKey(&context, testing_key, sizeof(TPassword));
 			decrypt_block(&context, decrypted, encrypted);
 			if (memcmp(decrypted, reference, sizeof(TBlock)) == 0) {
 				memcpy(password, testing_key, sizeof(TPassword));
-				std::cout << "Done!" << std::endl;
-				return true;
+				//std::cout << "Done!" << std::endl;
+				//return true;
 			}
-		}
+		//}
 	}
 
-	return false;*/
+	return false;
 }
