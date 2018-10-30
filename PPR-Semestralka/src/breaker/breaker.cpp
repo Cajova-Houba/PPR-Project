@@ -12,22 +12,24 @@
 #include <cstdio>
 #include <functional>
 
-const bool PRINT_KEY = true;
+const bool PRINT_KEY = false;
+
+const TPassword reference_password{ 'h', 'e', 'l', 0, 0, 0, 0, 0, 0, 0 };
 
 // differential evolutions constants
 // mutacni konstanta rec: 0.3 - 0.9
 // interval [0, 2]
-const double F = 1.9;
+const double F = 1.5;
 
 // prah krizeni 0.8 - 0.9
 // cim mene, tim vice krizeni
-const double CR = 0.9;
+const double CR = 0.2;
 
 // dimenze reseneo problemu = delka hesla
 const int D = 3;
 
 // pocet jedincu v populaci 10*D - 100*D
-const int NP = 300 * D;
+const int NP = 440 * D;
 
 // prototyp jedince
 const double SPECIMEN = 0;
@@ -78,6 +80,7 @@ double fitness_custom(const TPassword& individual, const TPassword& reference) {
 	double dist = 0;
 	// max value of custom fitness function
 	const double max = 262;
+	//const double max = 216;
 	int i = 0;
 	for (i = 0; i < D; i++) {
 		dist += pow(individual[i] - reference[i], 2);
@@ -179,6 +182,34 @@ void add_individuals(TPassword& res, const TPassword& vec1, const TPassword& vec
 	}
 }
 
+/*
+	Provede mutaci rand-1.
+	diff_vec = (vec1 - vec2) *F
+	noise_vec = diff_vec + vec3
+	
+	Kde vec1 ... vec3 jsou nahodne vybrane, nestejne prvky z populace. 
+	Vysledek noise_vec je ulozeny do res.
+*/
+void mutation_rand_1(TPassword& res, const TPassword& vec1, const TPassword& vec2, const TPassword& vec3) {
+	weight_vector_difference(res, vec1, vec2);
+	add_individuals(res, res, vec3);
+}
+
+
+/*
+	Provede mutaci best-2.
+	diff_vec = (vec1 + vec2 - vec3 - vec4) * F
+	noise_vec = diff_vec + best
+	
+	Kde vec1 ... vec2 jsou nahodne vybrane, nestejne prvky z populace a best je nejlepsi jedinec ze soucaasne populace.
+*/
+void mutation_best_2(TPassword& res, const TPassword& best, const TPassword& vec1, TPassword& vec2, TPassword& vec3, TPassword& vec4) {
+	int i = 0;
+	for (i = 0; i < D; i++) {
+		res[i] = best[i] + F * (vec1[i] + vec2[i] - vec3[i] - vec4[i]);
+	}
+}
+
 void binomic_cross(TPassword& res, const TPassword& active_individual, const TPassword& noise_vector) {
 	double random_val = 0;
 	int i = 0;
@@ -226,18 +257,33 @@ bool compare_individuals(TPassword& ind1, TPassword& ind2) {
 */
 void evolution(TPassword* population, TPassword* new_population, TBlock& encrypted, const TBlock& reference, const std::function<double(TPassword&)> fitness_function) {
 	int i = 0;
-	int rand1, rand2, rand3;
+	int rand1, rand2, rand3, rand4;
 	TPassword* active_individual;
 	TPassword* randomly_picked_1;
 	TPassword* randomly_picked_2;
 	TPassword* randomly_picked_3;
+	TPassword* randomly_picked_4;
 	TPassword diff_vector{ 0 };
 	TPassword noise_vector{ 0 };
 	TPassword crossed_vector{ 0 };
 	double new_score = 0;
 	double active_score = 0;
+	int bestIndex = -1;
+	double bestFitness = 0;
+	double fitness = 0;
 
 
+	// find best individual in current population
+	// possible optimization here
+	for (i = 0; i < NP; i++)
+	{
+		fitness = fitness_function(population[i]);
+		if (bestIndex == -1 || fitness > bestFitness) {
+			bestIndex = i;
+			bestFitness = fitness;
+		}
+	}
+	
 	for (i = 0; i < NP; i++)
 	{
 
@@ -245,7 +291,6 @@ void evolution(TPassword* population, TPassword* new_population, TBlock& encrypt
 		active_individual = &(population[i]);
 
 		// mutation
-		//	1. randomly pick 2 (different) individuals from population
 		rand1 = population_picker_distribution(generator);
 		rand2 = rand1;
 		while (!compare_individuals(population[rand1], population[rand2])) {
@@ -255,17 +300,19 @@ void evolution(TPassword* population, TPassword* new_population, TBlock& encrypt
 		while (!compare_individuals(population[rand2], population[rand3])) {
 			rand3 = population_picker_distribution(generator);
 		}
+		rand4 = rand3;
+		while (!compare_individuals(population[rand3], population[rand4])) {
+			rand4 = population_picker_distribution(generator);
+		}
 		randomly_picked_1 = &(population[rand1]);
 		randomly_picked_2 = &(population[rand2]);
 		randomly_picked_3 = &(population[rand3]);
+		randomly_picked_4 = &(population[rand4]);
 
-		//  2. diff_vector = substract those two individuals
-		//  3. weighted_diff_vector *= F
-		weight_vector_difference(diff_vector, *randomly_picked_1, *randomly_picked_2);
+		//mutation_rand_1(noise_vector, *randomly_picked_1, *randomly_picked_2, *randomly_picked_3);
+		mutation_best_2(noise_vector, population[bestIndex], *randomly_picked_1, *randomly_picked_2, *randomly_picked_3, *randomly_picked_4);
 
-		//	4. noise_vector = weighted_diff_vector + population[random]
-		// noise vector is result of mutation
-		add_individuals(noise_vector, diff_vector, *randomly_picked_3);
+
 
 		// cross
 		//	1. y = cross noise_vector (v) with active individual (x_i) (by CR parameter)
@@ -291,14 +338,13 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 	SJ_context context;
 	TBlock decrypted;
 	TPassword testing_key{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-	TPassword reference_password{ 'h', 'e', 'l', 0, 0, 0, 0, 0, 0, 0 };
 	int i = 0, j=0;
 	int generation = 0;
 	bool done = false;
 	TPassword population[NP] {0};
 	TPassword new_population[NP] {0};
 	TPassword *current_population_array;
-	std::function<double(TPassword&)> fitness_lambda = [&reference_password](TPassword& psw) {return fitness_custom(psw, reference_password); };
+	std::function<double(TPassword&)> fitness_lambda = [](TPassword& psw) {return fitness_custom(psw, reference_password); };
 
 	std::cout << "Creating first population " << std::endl;
 	create_first_population(population);
