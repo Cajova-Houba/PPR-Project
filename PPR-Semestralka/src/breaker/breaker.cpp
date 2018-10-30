@@ -10,26 +10,31 @@
 #include <random>
 #include <bitset>
 #include <cstdio>
+#include <functional>
+
+const bool PRINT_KEY = true;
 
 // differential evolutions constants
-// mutacni konstanta 0.3 - 0.9
-const double F = 0.6;
+// mutacni konstanta rec: 0.3 - 0.9
+// interval [0, 2]
+const double F = 1.9;
 
 // prah krizeni 0.8 - 0.9
-const double CR = 0.85;
+// cim mene, tim vice krizeni
+const double CR = 0.9;
 
-// dimenze reseneo problemu = delka hesla - 1
-const int D = 1;
+// dimenze reseneo problemu = delka hesla
+const int D = 3;
 
 // pocet jedincu v populaci 10*D - 100*D
-const int NP = 30 * D;
+const int NP = 300 * D;
 
 // prototyp jedince
 const double SPECIMEN = 0;
 
 // pocet evolucnich cyklu
 // pak bude alg ukoncen
-const double GENERATIONS = 10;
+const double GENERATIONS = 1000;
 
 // length of TBlock
 const int BLOCK_SIZE = 8;
@@ -49,12 +54,36 @@ void print_block(const TBlock& block) {
 	std::cout << std::endl;
 }
 
+// deprecated
 void print_key(const TPassword& key, const double score, const double score2) {
 	int i = 0;
 	for (i = 0; i < D; i++) {
 		printf("%#x ", key[i]);
 	}
 	std::cout << "\t;" << score << ";" << score2 << std::endl;
+}
+
+void print_key(const TPassword& key, const double score) {
+	int i = 0;
+	for (i = 0; i < D; i++) {
+		printf("%#x ", key[i]);
+	}
+	std::cout << "\t;" << score << std::endl;
+}
+
+/*
+	How close is individual to reference.
+*/
+double fitness_custom(const TPassword& individual, const TPassword& reference) {
+	double dist = 0;
+	// max value of custom fitness function
+	const double max = 262;
+	int i = 0;
+	for (i = 0; i < D; i++) {
+		dist += pow(individual[i] - reference[i], 2);
+	}
+		
+	return max - sqrt(dist);
 }
 
 /*
@@ -166,12 +195,27 @@ void binomic_cross(TPassword& res, const TPassword& active_individual, const TPa
 	}
 }
 
-void copy_individual(TPassword& res, const TPassword& src) {
+void copy_individual(TPassword& dest, const TPassword& src) {
 	int i = 0;
 	for ( i = 0; i < D; i++)
 	{
-		res[i] = src[i];
+		dest[i] = src[i];
 	}
+}
+
+/*
+	Compares two individuals and returns true if they're same.
+*/
+bool compare_individuals(TPassword& ind1, TPassword& ind2) {
+	int i = 0;
+	bool same = true;
+	
+	while (i < D && same) {
+		same = ind1[i] == ind2[i];
+		i++;
+	}
+
+	return same;
 }
 
 /*
@@ -180,22 +224,23 @@ void copy_individual(TPassword& res, const TPassword& src) {
 
 	New population is stored to new_population. 
 */
-void evolution(TPassword *population, TPassword *new_population, TBlock& encrypted, const TBlock &reference) {
+void evolution(TPassword* population, TPassword* new_population, TBlock& encrypted, const TBlock& reference, const std::function<double(TPassword&)> fitness_function) {
 	int i = 0;
 	int rand1, rand2, rand3;
 	TPassword* active_individual;
 	TPassword* randomly_picked_1;
 	TPassword* randomly_picked_2;
 	TPassword* randomly_picked_3;
-	TPassword diff_vector;
-	TPassword noise_vector;
-	TPassword crossed_vector;
+	TPassword diff_vector{ 0 };
+	TPassword noise_vector{ 0 };
+	TPassword crossed_vector{ 0 };
 	double new_score = 0;
 	double active_score = 0;
 
 
 	for (i = 0; i < NP; i++)
 	{
+
 		// active individual population[i]
 		active_individual = &(population[i]);
 
@@ -203,11 +248,16 @@ void evolution(TPassword *population, TPassword *new_population, TBlock& encrypt
 		//	1. randomly pick 2 (different) individuals from population
 		rand1 = population_picker_distribution(generator);
 		rand2 = rand1;
-		while (rand2 != rand1) {
+		while (!compare_individuals(population[rand1], population[rand2])) {
 			rand2 = population_picker_distribution(generator);
+		}
+		rand3 = rand2;
+		while (!compare_individuals(population[rand2], population[rand3])) {
+			rand3 = population_picker_distribution(generator);
 		}
 		randomly_picked_1 = &(population[rand1]);
 		randomly_picked_2 = &(population[rand2]);
+		randomly_picked_3 = &(population[rand3]);
 
 		//  2. diff_vector = substract those two individuals
 		//  3. weighted_diff_vector *= F
@@ -215,8 +265,6 @@ void evolution(TPassword *population, TPassword *new_population, TBlock& encrypt
 
 		//	4. noise_vector = weighted_diff_vector + population[random]
 		// noise vector is result of mutation
-		rand3 = population_picker_distribution(generator);
-		randomly_picked_3 = &(population[rand3]);
 		add_individuals(noise_vector, diff_vector, *randomly_picked_3);
 
 		// cross
@@ -226,8 +274,8 @@ void evolution(TPassword *population, TPassword *new_population, TBlock& encrypt
 		// choose new guy to population
 		// evaluate fitness(y)
 		// if (fitness(y) > fitness(active_individual)) -> y || active_individual
-		new_score = fitness(crossed_vector, encrypted, reference);
-		active_score = fitness(*active_individual, encrypted, reference);
+		new_score = fitness_function(crossed_vector);
+		active_score = fitness_function(*active_individual);
 		if (new_score > active_score) {
 			// use crossed_vector for new population
 			copy_individual(new_population[i], crossed_vector);
@@ -243,11 +291,14 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 	SJ_context context;
 	TBlock decrypted;
 	TPassword testing_key{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+	TPassword reference_password{ 'h', 'e', 'l', 0, 0, 0, 0, 0, 0, 0 };
 	int i = 0, j=0;
-	int generation = GENERATIONS;
+	int generation = 0;
 	bool done = false;
 	TPassword population[NP] {0};
 	TPassword new_population[NP] {0};
+	TPassword *current_population_array;
+	std::function<double(TPassword&)> fitness_lambda = [&reference_password](TPassword& psw) {return fitness_custom(psw, reference_password); };
 
 	std::cout << "Creating first population " << std::endl;
 	create_first_population(population);
@@ -261,19 +312,24 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 		for (i = 0; i < NP; i++) {
 
 			if (generation % 2 == 0) {
-				print_key(population[i], fitness(population[i], encrypted, reference), fitness_diff(population[i], encrypted, reference));
-				makeKey(&context, population[i], sizeof(TPassword));
+				current_population_array = population;
 			}
 			else {
-				print_key(new_population[i], fitness(new_population[i], encrypted, reference), fitness_diff(population[i], encrypted, reference));
-				makeKey(&context, new_population[i], sizeof(TPassword));
+				current_population_array = new_population;
 			}
+
+			if (PRINT_KEY) {
+				print_key(current_population_array[i], fitness_lambda(current_population_array[i]));
+			}
+			makeKey(&context, current_population_array[i], sizeof(TPassword));
 
 			// if the decryption is successfull => bingo
 			decrypt_block(&context, decrypted, encrypted);
 			if (memcmp(decrypted, reference, sizeof(TBlock)) == 0) {
 				memcpy(password, testing_key, sizeof(TPassword));
-				std::cout << "Done!" << std::endl;
+				copy_individual(password, current_population_array[i]);
+				print_key(current_population_array[i], fitness_lambda(current_population_array[i]));
+				std::cout << "Done in " << generation << "!" << std::endl;
 				done = true;
 				break;
 			}
@@ -281,35 +337,33 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 
 		// use current array as source of evolution and old array as destination of evolution
 		if (generation % 2 == 0) {
-			evolution(population, new_population, encrypted, reference);
+			evolution(population, new_population, encrypted, reference, fitness_lambda);
 		}
 		else {
-			evolution(new_population, population, encrypted, reference);
+			evolution(new_population, population, encrypted, reference, fitness_lambda);
 		}
 		
-		if (generation % 1 == 0) {
+		if (generation % 5 == 0) {
 			std::cout << "Generation: " << std::to_string(generation) << std::endl;
 		}
 
 		generation++;
-
-
 	}
 
-	//return done;
+	return done;
 
-	for (testing_key[0] = 0; testing_key[0] < 255; testing_key[0]++) {
-		//for (testing_key[1] = 0; testing_key[1] < 255; testing_key[1]++) {
-			print_key(testing_key, fitness(testing_key, encrypted, reference), fitness_diff_inverse(testing_key, encrypted, reference));
-			makeKey(&context, testing_key, sizeof(TPassword));
-			decrypt_block(&context, decrypted, encrypted);
-			if (memcmp(decrypted, reference, sizeof(TBlock)) == 0) {
-				memcpy(password, testing_key, sizeof(TPassword));
-				//std::cout << "Done!" << std::endl;
-				//return true;
-			}
-		//}
-	}
+	//for (testing_key[0] = 0; testing_key[0] < 255; testing_key[0]++) {
+	//	//for (testing_key[1] = 0; testing_key[1] < 255; testing_key[1]++) {
+	//		print_key(testing_key, fitness_custom(testing_key, reference_password), fitness_diff_inverse(testing_key, encrypted, reference));
+	//		makeKey(&context, testing_key, sizeof(TPassword));
+	//		decrypt_block(&context, decrypted, encrypted);
+	//		if (memcmp(decrypted, reference, sizeof(TBlock)) == 0) {
+	//			memcpy(password, testing_key, sizeof(TPassword));
+	//			//std::cout << "Done!" << std::endl;
+	//			//return true;
+	//		}
+	//	//}
+	//}
 
-	return false;
+	//return false;
 }
