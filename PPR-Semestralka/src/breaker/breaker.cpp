@@ -3,11 +3,13 @@
 //V ramci vypracovani semestralni prace muzete menit pouze a jedine tento souboru od teto radky dale.
 
 
-#include <memory.h>
+#include <memory>
 #include <iostream>
 #include <cmath>
 #include <string>
 #include <random>
+#include <bitset>
+#include <cstdio>
 
 // differential evolutions constants
 // mutacni konstanta 0.3 - 0.9
@@ -29,6 +31,9 @@ const double SPECIMEN = 0;
 // pak bude alg ukoncen
 const double GENERATIONS = 10;
 
+// length of TBlock
+const int BLOCK_SIZE = 8;
+
 // generator nahodnych cisel
 std::mt19937 generator(123);
 std::uniform_int_distribution<int> param_value_distribution(0, 255);
@@ -38,18 +43,18 @@ std::uniform_real_distribution<double> cross_distribution(0, 1);
 
 void print_block(const TBlock& block) {
 	int i = 0;
-	for (i = 0; i < 8; i++) {
+	for (i = 0; i < BLOCK_SIZE; i++) {
 		printf("%#x ", block[i]);
 	}
 	std::cout << std::endl;
 }
 
-void print_key(const TPassword& key, const double score) {
+void print_key(const TPassword& key, const double score, const double score2) {
 	int i = 0;
 	for (i = 0; i < D; i++) {
 		printf("%#x ", key[i]);
 	}
-	std::cout << "\t;" << score << std::endl;
+	std::cout << "\t;" << score << ";" << score2 << std::endl;
 }
 
 /*
@@ -66,7 +71,7 @@ double fitness(TPassword& individual, TBlock& encrypted, const TBlock &reference
 	makeKey(&context, individual, sizeof(TPassword));
 	decrypt_block(&context, decrypted, encrypted);
 
-	for (i = 0; i < 8; i++) {
+	for (i = 0; i < BLOCK_SIZE; i++) {
 		fit += (reference[i] - decrypted[i])*(reference[i] - decrypted[i]);
 	}
 
@@ -75,21 +80,36 @@ double fitness(TPassword& individual, TBlock& encrypted, const TBlock &reference
 	return fit;
 }
 
-double fitness_high_diff(TPassword& individual, TBlock& encrypted, const TBlock &reference) {
+// fitness by # of different bites
+double fitness_diff(TPassword& individual, TBlock& encrypted, const TBlock &reference) {
 	double fit = 0;
 	int i = 0;
 	TBlock decrypted;
 	SJ_context context;
+	byte xorRes;
+	std::bitset<8> bs;
 
 	makeKey(&context, individual, sizeof(TPassword));
 	decrypt_block(&context, decrypted, encrypted);
 
-	for (i = 0; i < 0; i++) {
-
+	for (i = 0; i < BLOCK_SIZE; i++) {
+		xorRes = reference[i] ^ decrypted[i];
+		bs = (xorRes);
+		fit += bs.count();
 	}
 
 
 	return fit;
+}
+
+double fitness_diff_inverse(TPassword& individual, TBlock& encrypted, const TBlock &reference) {
+	double fit_diff = fitness_diff(individual, encrypted, reference);
+	if (abs(fit_diff - 0) < 0.0000000001) {
+		return 0;
+	}
+	else {
+		return 1 / fit_diff;
+	}
 }
 
 /*
@@ -241,11 +261,11 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 		for (i = 0; i < NP; i++) {
 
 			if (generation % 2 == 0) {
-				print_key(population[i], fitness(population[i], encrypted, reference));
+				print_key(population[i], fitness(population[i], encrypted, reference), fitness_diff(population[i], encrypted, reference));
 				makeKey(&context, population[i], sizeof(TPassword));
 			}
 			else {
-				print_key(new_population[i], fitness(new_population[i], encrypted, reference));
+				print_key(new_population[i], fitness(new_population[i], encrypted, reference), fitness_diff(population[i], encrypted, reference));
 				makeKey(&context, new_population[i], sizeof(TPassword));
 			}
 
@@ -280,7 +300,7 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 
 	for (testing_key[0] = 0; testing_key[0] < 255; testing_key[0]++) {
 		//for (testing_key[1] = 0; testing_key[1] < 255; testing_key[1]++) {
-			print_key(testing_key, fitness(testing_key, encrypted, reference));
+			print_key(testing_key, fitness(testing_key, encrypted, reference), fitness_diff_inverse(testing_key, encrypted, reference));
 			makeKey(&context, testing_key, sizeof(TPassword));
 			decrypt_block(&context, decrypted, encrypted);
 			if (memcmp(decrypted, reference, sizeof(TBlock)) == 0) {
