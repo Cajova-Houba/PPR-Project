@@ -14,7 +14,19 @@
 
 const bool PRINT_KEY = false;
 
-const TPassword reference_password{ 'h', 'e', 'l', 0, 0, 0, 0, 0, 0, 0 };
+const TPassword reference_password_1{ 'h', 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+const TPassword reference_password_2{ 'h', 'e', 0, 0, 0, 0, 0, 0, 0, 0 };
+const TPassword reference_password_3{ 'h', 'e', 'l', 0, 0, 0, 0, 0, 0, 0 };
+const TPassword reference_password_4{ 'h', 'e', 'l', 'l', 0, 0, 0, 0, 0, 0 };
+const TPassword reference_password_5{ 'h', 'e', 'l', 'l', 'o', 0, 0, 0, 0, 0 };
+const TPassword reference_password_6{ 'h', 'e', 'l', 'l', 'o', '1', 0, 0, 0, 0 };
+const TPassword reference_password_7{ 'h', 'e', 'l', 'l', 'o', '1', '2', 0, 0, 0 };
+const TPassword reference_password_8{ 'h', 'e', 'l', 'l', 'o', '1', '2', '3', 0, 0 };
+const TPassword reference_password_9{ 'h', 'e', 'l', 'l', 'o', '1', '2', '3', '4', 0 };
+const TPassword reference_password_10{ 'h', 'e', 'l', 'l', 'o', '1', '2', '3', '4', '5' };
+const TPassword* reference_password = &reference_password_10;
+
+const double MAX_DIFF = sqrt(10 * 255 * 255);
 
 // differential evolutions constants
 // mutacni konstanta rec: 0.3 - 0.9
@@ -26,10 +38,10 @@ const double F = 1.5;
 const double CR = 0.2;
 
 // dimenze reseneo problemu = delka hesla
-const int D = 3;
+const int D = 10;
 
 // pocet jedincu v populaci 10*D - 100*D
-const int NP = 440 * D;
+const int NP = 900 * D;
 
 // prototyp jedince
 const double SPECIMEN = 0;
@@ -79,7 +91,7 @@ void print_key(const TPassword& key, const double score) {
 double fitness_custom(const TPassword& individual, const TPassword& reference) {
 	double dist = 0;
 	// max value of custom fitness function
-	const double max = 262;
+	const double max = MAX_DIFF;
 	//const double max = 216;
 	int i = 0;
 	for (i = 0; i < D; i++) {
@@ -344,7 +356,7 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 	TPassword population[NP] {0};
 	TPassword new_population[NP] {0};
 	TPassword *current_population_array;
-	std::function<double(TPassword&)> fitness_lambda = [](TPassword& psw) {return fitness_custom(psw, reference_password); };
+	std::function<double(TPassword&)> fitness_lambda = [](TPassword& psw) {return fitness_custom(psw, *reference_password); };
 
 	std::cout << "Creating first population " << std::endl;
 	create_first_population(population);
