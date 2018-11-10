@@ -32,5 +32,8 @@
     <ClInclude Include="src\skipjack.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\vectorclass\vectorclass.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

@@ -12,6 +12,9 @@
 #include <cstdio>
 #include <functional>
 
+// library for SIMD
+#include "../vectorclass/vectorclass.h"
+
 const bool PRINT_KEY = false;
 
 const TPassword reference_password_1{ 'h', 0, 0, 0, 0, 0, 0, 0, 0, 0 };
@@ -41,7 +44,7 @@ const double CR = 0.2;
 const int D = 10;
 
 // pocet jedincu v populaci 10*D - 100*D
-const int NP = 900 * D;
+const int NP = 850 * D;
 
 // prototyp jedince
 const double SPECIMEN = 0;
@@ -217,9 +220,26 @@ void mutation_rand_1(TPassword& res, const TPassword& vec1, const TPassword& vec
 */
 void mutation_best_2(TPassword& res, const TPassword& best, const TPassword& vec1, TPassword& vec2, TPassword& vec3, TPassword& vec4) {
 	int i = 0;
-	for (i = 0; i < D; i++) {
-		res[i] = best[i] + F * (vec1[i] + vec2[i] - vec3[i] - vec4[i]);
-	}
+	
+	// Vec16uc = unsigned int with length of 8 bits, it can store 16 elements
+	Vec16uc v1, v2, v3, v4, vb;
+
+	// Vec16f has single floating point precision and can take 16 elemenets
+	Vec16uc res_v;
+
+	// load vectors
+	vb.load(best);
+	v1.load(vec1);
+	v2.load(vec2);
+	v3.load(vec3);
+	v4.load(vec4);
+
+	// following loop is replaced with vector library
+	// for (i = 0; i < D; i++) {
+	//	 res[i] = best[i] + F * (vec1[i] + vec2[i] - vec3[i] - vec4[i]);
+	// }
+	res_v = vb + F * (v1 + v2 - v3 - v4);
+	res_v.store_partial(D, res);
 }
 
 void binomic_cross(TPassword& res, const TPassword& active_individual, const TPassword& noise_vector) {
@@ -240,10 +260,7 @@ void binomic_cross(TPassword& res, const TPassword& active_individual, const TPa
 
 void copy_individual(TPassword& dest, const TPassword& src) {
 	int i = 0;
-	for ( i = 0; i < D; i++)
-	{
-		dest[i] = src[i];
-	}
+	std::copy(src, src + D, dest);
 }
 
 /*
@@ -303,6 +320,7 @@ void evolution(TPassword* population, TPassword* new_population, TBlock& encrypt
 		active_individual = &(population[i]);
 
 		// mutation
+		// randomly pick 4 different individuals from current population
 		rand1 = population_picker_distribution(generator);
 		rand2 = rand1;
 		while (!compare_individuals(population[rand1], population[rand2])) {
