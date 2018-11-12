@@ -20,7 +20,7 @@
 
 const bool PRINT_KEY = false;
 
-const bool PRINT_BEST = true;
+const bool PRINT_BEST = false;
 
 // passwords of various length for testing
 // hex form of full password: 0x68 0x65 0x6C 0x6C 0x6F 0x31 0x32 0x34 0x35
@@ -87,14 +87,19 @@ struct evolution_batch {
 	// array can be indexed from batch_index to batch_index + 5
 	TPassword *new_population;
 
+	TPassword new_pop[BATCH_SIZE];
+
 	// index of best individual
 	int best_individual_index;
+
+	TPassword best_individual;
 	
 	// active individuals for this batch
-	TPassword *active_individuals[BATCH_SIZE];
+	TPassword active_individuals[BATCH_SIZE];
 
 	// 4 random individuals for every batch
 	int random_individual_indexes[BATCH_SIZE][VEC_LEN];
+	TPassword random_individuals[BATCH_SIZE][VEC_LEN];
 };
 
 
@@ -446,15 +451,16 @@ void prepare_evolution_batch(TPassword* population, const std::function<double(T
 	int rand1, rand2, rand3, rand4;
 	for (i = 0; i < BATCH_SIZE; i++)
 	{
-		ev_batch.active_individuals[i] = &(population[ev_batch.batch_index + i]);
+		copy_individual(ev_batch.active_individuals[i], (population[ev_batch.batch_index + i]));
+		//ev_batch.active_individuals[i] = &(population[ev_batch.batch_index + i]);
 
 		// pick four different randoms
 		prick_four_random(&rand1, &rand2, &rand3, &rand4);
 		
-		ev_batch.random_individual_indexes[i][0] = rand1;
-		ev_batch.random_individual_indexes[i][1] = rand2;
-		ev_batch.random_individual_indexes[i][2] = rand3;
-		ev_batch.random_individual_indexes[i][3] = rand4;
+		copy_individual(ev_batch.random_individuals[i][0], population[rand1]);
+		copy_individual(ev_batch.random_individuals[i][1], population[rand2]);
+		copy_individual(ev_batch.random_individuals[i][2], population[rand3]);
+		copy_individual(ev_batch.random_individuals[i][3], population[rand4]);
 	}
 
 	//int i = 0;
@@ -504,6 +510,7 @@ void prepare_evolution_batch(TPassword* population, const std::function<double(T
 }
 
 void prepare_bestvector_for_batch(TPassword& best_vector, evolution_batch& ev_batch) {
+	copy_individual(ev_batch.best_individual, best_vector);
 	//ev_batch.best_individual = &best_vector;
 	//byte help_array[48] = { 0 };
 	//std::copy(best_vector, best_vector + 10, help_array);
@@ -516,7 +523,7 @@ void prepare_bestvector_for_batch(TPassword& best_vector, evolution_batch& ev_ba
 	//ev_batch.best_vector[2].load(help_array + 32);
 }
 
-void process_evolution_batch(TPassword* population, evolution_batch& ev_batch, const std::function<double(TPassword&)> fitness_function) {
+void process_evolution_batch(evolution_batch& ev_batch, const std::function<double(TPassword&)> fitness_function) {
 	int act_ind_cntr = 0;
 	TPassword noise_vec;
 	TPassword res_vec;
@@ -525,26 +532,26 @@ void process_evolution_batch(TPassword* population, evolution_batch& ev_batch, c
 	for (act_ind_cntr = 0; act_ind_cntr < BATCH_SIZE; act_ind_cntr++)
 	{
 		// mutation 
-		mutation_best_2(noise_vec, population[ev_batch.best_individual_index],
-			population[ev_batch.random_individual_indexes[act_ind_cntr][0]],
-			population[ev_batch.random_individual_indexes[act_ind_cntr][1]],
-			population[ev_batch.random_individual_indexes[act_ind_cntr][2]],
-			population[ev_batch.random_individual_indexes[act_ind_cntr][3]]
+		mutation_best_2(noise_vec, ev_batch.best_individual,
+			ev_batch.random_individuals[act_ind_cntr][0],
+			ev_batch.random_individuals[act_ind_cntr][1],
+			ev_batch.random_individuals[act_ind_cntr][2],
+			ev_batch.random_individuals[act_ind_cntr][3]
 		);
 
 		// cross
-		binomic_cross(res_vec, *(ev_batch.active_individuals[act_ind_cntr]), noise_vec);
+		binomic_cross(res_vec, ev_batch.active_individuals[act_ind_cntr], noise_vec);
 
 		// add to new pop
 		new_score = fitness_function(res_vec);
-		active_score = fitness_function(*(ev_batch.active_individuals[act_ind_cntr]));
+		active_score = fitness_function(ev_batch.active_individuals[act_ind_cntr]);
 		if (new_score > active_score) {
 			// use crossed_vector for new population
-			copy_individual(ev_batch.new_population[act_ind_cntr + ev_batch.batch_index], res_vec);
+			copy_individual(ev_batch.new_pop[act_ind_cntr], res_vec);
 		}
 		else {
 			// use active_score for new population
-			copy_individual(ev_batch.new_population[act_ind_cntr + ev_batch.batch_index], *(ev_batch.active_individuals[act_ind_cntr]));
+			copy_individual(ev_batch.new_pop[act_ind_cntr], ev_batch.active_individuals[act_ind_cntr]);
 		}
 
 	}
@@ -577,6 +584,7 @@ void process_evolution_batch(TPassword* population, evolution_batch& ev_batch, c
 */
 void evolution_parallel(TPassword* population, TPassword* new_population, TBlock& encrypted, const TBlock& reference, const std::function<double(TPassword&)> fitness_function) {
 	int i = 0;
+	int j = 0;
 	int bestIndex = -1;
 	double bestFitness = 0;
 	evolution_batch ev_batch;
@@ -591,8 +599,8 @@ void evolution_parallel(TPassword* population, TPassword* new_population, TBlock
 	if (PRINT_BEST) {
 		print_key((population[bestIndex]), bestFitness);
 	}
-	ev_batch.best_individual_index = bestIndex;
-	ev_batch_2.best_individual_index = bestIndex;
+	prepare_bestvector_for_batch(population[bestIndex], ev_batch);
+	prepare_bestvector_for_batch(population[bestIndex], ev_batch_2);
 
 	for (i = 0; i < NP; i += BATCH_SIZE*2) 
 	{
@@ -606,9 +614,15 @@ void evolution_parallel(TPassword* population, TPassword* new_population, TBlock
 		batches[1] = ev_batch_2;
 
 		// do stuff with the batch
-		tbb::parallel_for(size_t(0), batch_size, [&population, &batches, &fitness_function]( size_t(i)) {
-			process_evolution_batch(population, batches[i], fitness_function);
+		tbb::parallel_for(size_t(0), batch_size, [&batches, &fitness_function]( size_t(i)) {
+			process_evolution_batch(batches[i], fitness_function);
 		});
+
+		// new population
+		for (j = 0; j < BATCH_SIZE; j++) {
+			copy_individual(new_population[i + j], batches[0].new_pop[j]);
+			copy_individual(new_population[i + BATCH_SIZE + j], batches[1].new_pop[j]);
+		}
 	}
 }
 
