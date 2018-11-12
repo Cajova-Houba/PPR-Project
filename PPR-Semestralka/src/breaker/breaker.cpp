@@ -15,6 +15,9 @@
 // library for SIMD
 #include "../vectorclass/vectorclass.h"
 
+// intel TBB
+#include "../tbb/tbb.h"
+
 const bool PRINT_KEY = false;
 
 const bool PRINT_BEST = true;
@@ -577,6 +580,9 @@ void evolution_parallel(TPassword* population, TPassword* new_population, TBlock
 	int bestIndex = -1;
 	double bestFitness = 0;
 	evolution_batch ev_batch;
+	evolution_batch ev_batch_2;
+	evolution_batch batches[2];
+	size_t batch_size = 2;
 
 	ev_batch.new_population = new_population;
 
@@ -586,15 +592,23 @@ void evolution_parallel(TPassword* population, TPassword* new_population, TBlock
 		print_key((population[bestIndex]), bestFitness);
 	}
 	ev_batch.best_individual_index = bestIndex;
+	ev_batch_2.best_individual_index = bestIndex;
 
-	for (i = 0; i < NP; i += 6) 
+	for (i = 0; i < NP; i += BATCH_SIZE*2) 
 	{
 		ev_batch.batch_index = i;
+		ev_batch_2.batch_index = i+BATCH_SIZE;
 		// prepare batch of individuals, their randoms
 		prepare_evolution_batch(population, fitness_function, ev_batch);
 
+		prepare_evolution_batch(population, fitness_function, ev_batch_2);
+		batches[0] = ev_batch;
+		batches[1] = ev_batch_2;
+
 		// do stuff with the batch
-		process_evolution_batch(population, ev_batch, fitness_function);
+		tbb::parallel_for(size_t(0), batch_size, [&population, &batches, &fitness_function]( size_t(i)) {
+			process_evolution_batch(population, batches[i], fitness_function);
+		});
 	}
 }
 

@@ -35,5 +35,8 @@
     <ClInclude Include="src\vectorclass\vectorclass.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\tbb\tbb.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
