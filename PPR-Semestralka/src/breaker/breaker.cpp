@@ -40,7 +40,7 @@ const double MAX_DIFF = 806.38080334294;
 // differential evolutions constants
 // mutacni konstanta rec: 0.3 - 0.9
 // interval [0, 2]
-const double F = 1.5;
+const double F = 0.9;
 
 // prah krizeni 0.8 - 0.9
 // cim mene, tim vice krizeni
@@ -50,14 +50,14 @@ const double CR = 0.2;
 const int D = 10;
 
 // pocet jedincu v populaci 10*D - 100*D
-const int NP = 366 * D;
+const int NP = 420 * D;
 
 // prototyp jedince
 const double SPECIMEN = 0;
 
 // pocet evolucnich cyklu
 // pak bude alg ukoncen
-const double GENERATIONS = 200;
+const double GENERATIONS = 800;
 
 // length of TBlock
 const int BLOCK_SIZE = 8;
@@ -86,22 +86,11 @@ struct evolution_batch {
 
 	// index of best individual
 	int best_individual_index;
-
-	TPassword* best_individual;
-
-	// 2 vectors for 3 active individuals
-	Vec16uc active_individuals_0_2[2];
-	Vec16uc active_individuals_3_5[2];
-
-	// Three Vec16uc vectors to store 4 random individuals for active individuals 0..5
-	Vec16uc random_individuals[BATCH_SIZE][VEC_LEN];
-
-	// Best individual copied to 3 vector so it can be used when calculating with random individuals
-	Vec16uc best_vector[VEC_LEN];
-
 	
+	// active individuals for this batch
 	TPassword *active_individuals[BATCH_SIZE];
 
+	// 4 random individuals for every batch
 	int random_individual_indexes[BATCH_SIZE][VEC_LEN];
 };
 
@@ -423,31 +412,41 @@ void find_best_individual(TPassword* population, const std::function<double(TPas
 #pragma endregion
 
 
+void prick_four_random(int* r1, int* r2, int* r3, int* r4) {
+	int rand1, rand2, rand3, rand4;
+	rand1 = population_picker_distribution(generator);
+	rand2 = rand1;
+	while (rand1 == rand2) {
+		rand2 = population_picker_distribution(generator);
+	}
+	rand3 = rand2;
+	while (rand2 == rand3) {
+		rand3 = population_picker_distribution(generator);
+	}
+	rand4 = rand3;
+	while (rand3 == rand4) {
+		rand4 = population_picker_distribution(generator);
+	}
+
+	*r1 = rand1;
+	*r2 = rand2;
+	*r3 = rand3;
+	*r4 = rand4;
+}
+
 /*
 	Prepares one batch for evolution's parallel for.
 	Transforms active individuals and their randoms to vectors.
 */
 void prepare_evolution_batch(TPassword* population, const std::function<double(TPassword&)> fitness_function, evolution_batch& ev_batch) {
 	int i = 0;
-	int rand1, rand2, rand3, rand4 = 0;
+	int rand1, rand2, rand3, rand4;
 	for (i = 0; i < BATCH_SIZE; i++)
 	{
 		ev_batch.active_individuals[i] = &(population[ev_batch.batch_index + i]);
 
 		// pick four different randoms
-		rand1 = population_picker_distribution(generator);
-		rand2 = rand1;
-		while (!compare_individuals(population[rand1], population[rand2])) {
-			rand2 = population_picker_distribution(generator);
-		}
-		rand3 = rand2;
-		while (!compare_individuals(population[rand2], population[rand3])) {
-			rand3 = population_picker_distribution(generator);
-		}
-		rand4 = rand3;
-		while (!compare_individuals(population[rand3], population[rand4])) {
-			rand4 = population_picker_distribution(generator);
-		}
+		prick_four_random(&rand1, &rand2, &rand3, &rand4);
 		
 		ev_batch.random_individual_indexes[i][0] = rand1;
 		ev_batch.random_individual_indexes[i][1] = rand2;
@@ -502,16 +501,16 @@ void prepare_evolution_batch(TPassword* population, const std::function<double(T
 }
 
 void prepare_bestvector_for_batch(TPassword& best_vector, evolution_batch& ev_batch) {
-	ev_batch.best_individual = &best_vector;
-	byte help_array[48] = { 0 };
-	std::copy(best_vector, best_vector + 10, help_array);
-	std::copy(best_vector, best_vector + 10, help_array + 10);
-	std::copy(best_vector, best_vector + 10, help_array + 20);
-	std::copy(best_vector, best_vector + 10, help_array + 30);
+	//ev_batch.best_individual = &best_vector;
+	//byte help_array[48] = { 0 };
+	//std::copy(best_vector, best_vector + 10, help_array);
+	//std::copy(best_vector, best_vector + 10, help_array + 10);
+	//std::copy(best_vector, best_vector + 10, help_array + 20);
+	//std::copy(best_vector, best_vector + 10, help_array + 30);
 
-	ev_batch.best_vector[0].load(help_array);
-	ev_batch.best_vector[1].load(help_array + 16);
-	ev_batch.best_vector[2].load(help_array + 32);
+	//ev_batch.best_vector[0].load(help_array);
+	//ev_batch.best_vector[1].load(help_array + 16);
+	//ev_batch.best_vector[2].load(help_array + 32);
 }
 
 void process_evolution_batch(TPassword* population, evolution_batch& ev_batch, const std::function<double(TPassword&)> fitness_function) {
@@ -586,12 +585,12 @@ void evolution_parallel(TPassword* population, TPassword* new_population, TBlock
 	if (PRINT_BEST) {
 		print_key((population[bestIndex]), bestFitness);
 	}
-	prepare_bestvector_for_batch(population[bestIndex], ev_batch);
+	ev_batch.best_individual_index = bestIndex;
 
 	for (i = 0; i < NP; i += 6) 
 	{
 		ev_batch.batch_index = i;
-		// prepare batch of individuals, their randoms, and reference to best individual
+		// prepare batch of individuals, their randoms
 		prepare_evolution_batch(population, fitness_function, ev_batch);
 
 		// do stuff with the batch
@@ -636,21 +635,7 @@ void evolution(TPassword* population, TPassword* new_population, TBlock& encrypt
 		// active individual population[i]
 		active_individual = &(population[i]);
 
-		// mutation
-		// randomly pick 4 different individuals from current population
-		rand1 = population_picker_distribution(generator);
-		rand2 = rand1;
-		while (!compare_individuals(population[rand1], population[rand2])) {
-			rand2 = population_picker_distribution(generator);
-		}
-		rand3 = rand2;
-		while (!compare_individuals(population[rand2], population[rand3])) {
-			rand3 = population_picker_distribution(generator);
-		}
-		rand4 = rand3;
-		while (!compare_individuals(population[rand3], population[rand4])) {
-			rand4 = population_picker_distribution(generator);
-		}
+		prick_four_random(&rand1, &rand2, &rand3, &rand4);
 		randomly_picked_1 = &(population[rand1]);
 		randomly_picked_2 = &(population[rand2]);
 		randomly_picked_3 = &(population[rand3]);
@@ -739,11 +724,11 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 		// use current array as source of evolution and old array as destination of evolution
 		if (generation % 2 == 0) {
 			//evolution_parallel(population, new_population, encrypted, reference, fitness_lambda);
-			evolution(population, new_population, encrypted, reference, fitness_lambda);
+			evolution_parallel(population, new_population, encrypted, reference, fitness_lambda);
 		}
 		else {
 			//evolution_parallel(new_population, population, encrypted, reference, fitness_lambda);
-			evolution(new_population, population, encrypted, reference, fitness_lambda);
+			evolution_parallel(new_population, population, encrypted, reference, fitness_lambda);
 		}
 		
 		if (generation % 5 == 0) {
