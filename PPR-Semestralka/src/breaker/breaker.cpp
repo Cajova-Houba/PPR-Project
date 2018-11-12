@@ -17,6 +17,10 @@
 
 const bool PRINT_KEY = false;
 
+const bool PRINT_BEST = true;
+
+// passwords of various length for testing
+// hex form of full password: 0x68 0x65 0x6C 0x6C 0x6F 0x31 0x32 0x34 0x35
 const TPassword reference_password_1{ 'h', 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 const TPassword reference_password_2{ 'h', 'e', 0, 0, 0, 0, 0, 0, 0, 0 };
 const TPassword reference_password_3{ 'h', 'e', 'l', 0, 0, 0, 0, 0, 0, 0 };
@@ -29,7 +33,9 @@ const TPassword reference_password_9{ 'h', 'e', 'l', 'l', 'o', '1', '2', '3', '4
 const TPassword reference_password_10{ 'h', 'e', 'l', 'l', 'o', '1', '2', '3', '4', '5' };
 const TPassword* reference_password = &reference_password_10;
 
-const double MAX_DIFF = sqrt(10 * 255 * 255);
+// custom fitness function constants
+const double MAX_BIT_DIFF = 10 * 8;
+const double MAX_DIFF = 806.38080334294;
 
 // differential evolutions constants
 // mutacni konstanta rec: 0.3 - 0.9
@@ -44,17 +50,61 @@ const double CR = 0.2;
 const int D = 10;
 
 // pocet jedincu v populaci 10*D - 100*D
-const int NP = 850 * D;
+const int NP = 366 * D;
 
 // prototyp jedince
 const double SPECIMEN = 0;
 
 // pocet evolucnich cyklu
 // pak bude alg ukoncen
-const double GENERATIONS = 1000;
+const double GENERATIONS = 200;
 
 // length of TBlock
 const int BLOCK_SIZE = 8;
+
+// parametry gaussovske cenove funkce
+// G_A je max výška kopce
+// G_S je šíøka kopce
+const int G_A = 500;
+const int G_S = 15;
+
+// number of items in one batch for parallel_for
+const int BATCH_SIZE = 6;
+
+// number of vectors to store 4 individuals
+const int VEC_LEN = 4;
+
+/*
+	One batch of stuff for evolution.
+*/
+struct evolution_batch {
+	int batch_index;
+
+	// pointer to array to store new population to
+	// array can be indexed from batch_index to batch_index + 5
+	TPassword *new_population;
+
+	// index of best individual
+	int best_individual_index;
+
+	TPassword* best_individual;
+
+	// 2 vectors for 3 active individuals
+	Vec16uc active_individuals_0_2[2];
+	Vec16uc active_individuals_3_5[2];
+
+	// Three Vec16uc vectors to store 4 random individuals for active individuals 0..5
+	Vec16uc random_individuals[BATCH_SIZE][VEC_LEN];
+
+	// Best individual copied to 3 vector so it can be used when calculating with random individuals
+	Vec16uc best_vector[VEC_LEN];
+
+	
+	TPassword *active_individuals[BATCH_SIZE];
+
+	int random_individual_indexes[BATCH_SIZE][VEC_LEN];
+};
+
 
 // generator nahodnych cisel
 std::mt19937 generator(123);
@@ -71,15 +121,6 @@ void print_block(const TBlock& block) {
 	std::cout << std::endl;
 }
 
-// deprecated
-void print_key(const TPassword& key, const double score, const double score2) {
-	int i = 0;
-	for (i = 0; i < D; i++) {
-		printf("%#x ", key[i]);
-	}
-	std::cout << "\t;" << score << ";" << score2 << std::endl;
-}
-
 void print_key(const TPassword& key, const double score) {
 	int i = 0;
 	for (i = 0; i < D; i++) {
@@ -88,10 +129,85 @@ void print_key(const TPassword& key, const double score) {
 	std::cout << "\t;" << score << std::endl;
 }
 
+#pragma region fitness_functions
 /*
-	How close is individual to reference.
+	This fitness function uses gaussian curve with the top being the best individual.
+
+	the function has following format:
+	fit = a * e^( 
+		-(v1-u1)^2 / (2*s^2) 
+		-(v2-u2)^2 / (2*s^2)
+		-(v3-u3)^2 / (2*s^2)
+		...
+	)
+	Where a and s are standard parameters of gaussian function, v1..vn are components of individual which
+	is being tested and u1..un are components of reference block.
 */
-double fitness_custom(const TPassword& individual, const TPassword& reference) {
+double fitness_gauss(TPassword& individual, TBlock& encrypted, const TBlock& reference) {
+	double fit = 0;
+	int i = 0;
+	TBlock decrypted;
+	SJ_context context;
+
+	makeKey(&context, individual, sizeof(TPassword));
+	decrypt_block(&context, decrypted, encrypted);
+
+	for (i = 0; i < 8; i++)
+	{
+		fit += -std::pow(decrypted[i] - reference[i], 2) / (2 * G_S*G_S);
+	}
+
+	return G_A * std::exp(fit);
+}
+
+/*
+	Bit difference of individual from reference password. The lower the number, the bigger the difference.
+*/
+double fitness_custom_bit_diff(const TPassword& individual) {
+	double fit = 0;
+	int i = 0;
+	byte xorRes;
+	std::bitset<D> bs;
+
+	for (i = 0; i < D; i++) {
+		xorRes = individual[i] ^ (*reference_password)[i];
+		bs = (xorRes);
+		fit += bs.count();
+	}
+
+
+	return MAX_BIT_DIFF - fit;
+}
+
+/*
+	How close is individual to reference. Uses gaussian 'hill' where the reference is on the top. 
+	The function has following format:
+	fit = a * e^(
+		-(v1-u1)^2 / (2*s^2)
+		-(v2-u2)^2 / (2*s^2)
+		-(v3-u3)^2 / (2*s^2)
+		...
+	)
+	Where a and s are standard parameters of gaussian function, v1..vn are components of individual which
+	is being tested and u1..un are components of reference block.
+*/
+double fitness_custom_gauss(const TPassword& individual) {
+	int i = 0;
+	double fit = 0;
+
+	for (i = 0; i < D; i++)
+	{
+		fit += -std::pow(individual[i] - (*reference_password)[i], 2) / (2 * G_S*G_S);
+	}
+
+	return G_A * std::exp(fit);
+}
+
+/*
+	How close is individual to reference. This is not good for higher dimensions as wrong
+	individuals still can get pretty high score.
+*/
+double fitness_custom_linear(const TPassword& individual, const TPassword& reference) {
 	double dist = 0;
 	// max value of custom fitness function
 	const double max = MAX_DIFF;
@@ -159,15 +275,20 @@ double fitness_diff_inverse(TPassword& individual, TBlock& encrypted, const TBlo
 	}
 }
 
+#pragma endregion
+
+
+#pragma region evolution_helpers
 /*
 	Randomly gnerates one guy in population.
 */
 void generate_individual(TPassword& guy) {
-	int i = 0;
+	byte i = 0;
 
 	for (i = 0; i < D; i++)
 	{
 		guy[i] = (byte)param_value_distribution(generator);
+		//guy[i] = (byte)i;
 	}
 }
 
@@ -279,6 +400,206 @@ bool compare_individuals(TPassword& ind1, TPassword& ind2) {
 }
 
 /*
+	Finds the best individual in the population and returns its index and score.
+*/
+void find_best_individual(TPassword* population, const std::function<double(TPassword&)> fitness_function, int* best_index, double* best_score) {
+	int i = 0;
+	double fitness = 0;
+	double b_s = 0;
+	int b_i = -1;
+
+	for (i = 0; i < NP; i++)
+	{
+		fitness = fitness_function(population[i]);
+		if (b_i == -1 || fitness > b_s) {
+			b_i = i;
+			b_s = fitness;
+		}
+	}
+
+	*best_index = b_i;
+	*best_score = b_s;
+}
+#pragma endregion
+
+
+/*
+	Prepares one batch for evolution's parallel for.
+	Transforms active individuals and their randoms to vectors.
+*/
+void prepare_evolution_batch(TPassword* population, const std::function<double(TPassword&)> fitness_function, evolution_batch& ev_batch) {
+	int i = 0;
+	int rand1, rand2, rand3, rand4 = 0;
+	for (i = 0; i < BATCH_SIZE; i++)
+	{
+		ev_batch.active_individuals[i] = &(population[ev_batch.batch_index + i]);
+
+		// pick four different randoms
+		rand1 = population_picker_distribution(generator);
+		rand2 = rand1;
+		while (!compare_individuals(population[rand1], population[rand2])) {
+			rand2 = population_picker_distribution(generator);
+		}
+		rand3 = rand2;
+		while (!compare_individuals(population[rand2], population[rand3])) {
+			rand3 = population_picker_distribution(generator);
+		}
+		rand4 = rand3;
+		while (!compare_individuals(population[rand3], population[rand4])) {
+			rand4 = population_picker_distribution(generator);
+		}
+		
+		ev_batch.random_individual_indexes[i][0] = rand1;
+		ev_batch.random_individual_indexes[i][1] = rand2;
+		ev_batch.random_individual_indexes[i][2] = rand3;
+		ev_batch.random_individual_indexes[i][3] = rand4;
+	}
+
+	//int i = 0;
+	//int rand1, rand2, rand3, rand4 = 0;
+	//int arr_index;
+	//byte help_array[48] = { 0 };
+
+	//// set active individuals
+	//// the [1] individual is split between 0 and 1 vector
+	//std::copy(population[ev_batch.batch_index], population[ev_batch.batch_index]+10, help_array);
+	//std::copy(population[ev_batch.batch_index + 1], population[ev_batch.batch_index + 1]+10, help_array + 10);
+	//std::copy(population[ev_batch.batch_index + 2], population[ev_batch.batch_index + 2] + 10, help_array + 20);
+	//ev_batch.active_individuals_0_2[0].load(help_array);
+	//ev_batch.active_individuals_0_2[1].load(help_array+16);
+
+	//// find randoms for each individual
+	//for (i = ev_batch.batch_index; i < BATCH_SIZE; i++)
+	//{	
+	//	// arr index is in  range [0..BATCH_SIZE]
+	//	arr_index = i - ev_batch.batch_index;
+
+	//	// pick four different randoms
+	//	rand1 = population_picker_distribution(generator);
+	//	rand2 = rand1;
+	//	while (!compare_individuals(population[rand1], population[rand2])) {
+	//		rand2 = population_picker_distribution(generator);
+	//	}
+	//	rand3 = rand2;
+	//	while (!compare_individuals(population[rand2], population[rand3])) {
+	//		rand3 = population_picker_distribution(generator);
+	//	}
+	//	rand4 = rand3;
+	//	while (!compare_individuals(population[rand3], population[rand4])) {
+	//		rand4 = population_picker_distribution(generator);
+	//	}
+
+	//	// convert those randoms to vectors
+	//	// first, copy it to help_array, then load it to vectors
+	//	std::copy(population[rand1], population[rand1] + 10, help_array);
+	//	std::copy(population[rand2], population[rand2] + 10, help_array + 10);
+	//	std::copy(population[rand3], population[rand3] + 10, help_array + 20);
+	//	std::copy(population[rand4], population[rand4] + 10, help_array + 30);
+	//	ev_batch.random_individuals[arr_index][0].load(help_array);
+	//	ev_batch.random_individuals[arr_index][1].load(help_array + 16);
+	//	ev_batch.random_individuals[arr_index][2].load(help_array + 32);
+	//}
+}
+
+void prepare_bestvector_for_batch(TPassword& best_vector, evolution_batch& ev_batch) {
+	ev_batch.best_individual = &best_vector;
+	byte help_array[48] = { 0 };
+	std::copy(best_vector, best_vector + 10, help_array);
+	std::copy(best_vector, best_vector + 10, help_array + 10);
+	std::copy(best_vector, best_vector + 10, help_array + 20);
+	std::copy(best_vector, best_vector + 10, help_array + 30);
+
+	ev_batch.best_vector[0].load(help_array);
+	ev_batch.best_vector[1].load(help_array + 16);
+	ev_batch.best_vector[2].load(help_array + 32);
+}
+
+void process_evolution_batch(TPassword* population, evolution_batch& ev_batch, const std::function<double(TPassword&)> fitness_function) {
+	int act_ind_cntr = 0;
+	TPassword noise_vec;
+	TPassword res_vec;
+	double new_score, active_score;
+
+	for (act_ind_cntr = 0; act_ind_cntr < BATCH_SIZE; act_ind_cntr++)
+	{
+		// mutation 
+		mutation_best_2(noise_vec, population[ev_batch.best_individual_index],
+			population[ev_batch.random_individual_indexes[act_ind_cntr][0]],
+			population[ev_batch.random_individual_indexes[act_ind_cntr][1]],
+			population[ev_batch.random_individual_indexes[act_ind_cntr][2]],
+			population[ev_batch.random_individual_indexes[act_ind_cntr][3]]
+		);
+
+		// cross
+		binomic_cross(res_vec, *(ev_batch.active_individuals[act_ind_cntr]), noise_vec);
+
+		// add to new pop
+		new_score = fitness_function(res_vec);
+		active_score = fitness_function(*(ev_batch.active_individuals[act_ind_cntr]));
+		if (new_score > active_score) {
+			// use crossed_vector for new population
+			copy_individual(ev_batch.new_population[act_ind_cntr + ev_batch.batch_index], res_vec);
+		}
+		else {
+			// use active_score for new population
+			copy_individual(ev_batch.new_population[act_ind_cntr + ev_batch.batch_index], *(ev_batch.active_individuals[act_ind_cntr]));
+		}
+
+	}
+
+	//int act_ind_cntr = 0;
+	//int i = 0;
+	//Vec16uc mutation_vec[VEC_LEN];
+	//Vec16uc res_vec[VEC_LEN];
+
+	//// mutation
+	//// res[i] = best[i] + F * (vec1[i] + vec2[i] - vec3[i] - vec4[i]);
+	//for (i = 0; i < VEC_LEN; i++)
+	//{
+	//	mutation_vec[i] = ev_batch.best_vector[i] + F * (ev_batch.random_individuals[0][0]
+	//		+ ev_batch.random_individuals[0][1]
+	//		- ev_batch.random_individuals[0][2]
+	//		- ev_batch.random_individuals[0][3]);
+	//}
+
+	//// cross
+
+
+	//// set new individual
+}
+
+/*
+	Same as evolution(...) but uses parallel for and vector instructions.
+	Vec16uc is used for vector type as two vectors can fit 3 individuals. One batch of parallel_for is 
+	2 vectors -> 6 individuals.
+*/
+void evolution_parallel(TPassword* population, TPassword* new_population, TBlock& encrypted, const TBlock& reference, const std::function<double(TPassword&)> fitness_function) {
+	int i = 0;
+	int bestIndex = -1;
+	double bestFitness = 0;
+	evolution_batch ev_batch;
+
+	ev_batch.new_population = new_population;
+
+	// best individual, this will be the same for whole evolution cycle
+	find_best_individual(population, fitness_function, &bestIndex, &bestFitness);
+	if (PRINT_BEST) {
+		print_key((population[bestIndex]), bestFitness);
+	}
+	prepare_bestvector_for_batch(population[bestIndex], ev_batch);
+
+	for (i = 0; i < NP; i += 6) 
+	{
+		ev_batch.batch_index = i;
+		// prepare batch of individuals, their randoms, and reference to best individual
+		prepare_evolution_batch(population, fitness_function, ev_batch);
+
+		// do stuff with the batch
+		process_evolution_batch(population, ev_batch, fitness_function);
+	}
+}
+
+/*
 	Performs one cycle of evolution over given population. Encrypted and reference blocks are used
 	for calculating fitness function.
 
@@ -299,20 +620,16 @@ void evolution(TPassword* population, TPassword* new_population, TBlock& encrypt
 	double active_score = 0;
 	int bestIndex = -1;
 	double bestFitness = 0;
-	double fitness = 0;
 
 
 	// find best individual in current population
 	// possible optimization here
-	for (i = 0; i < NP; i++)
-	{
-		fitness = fitness_function(population[i]);
-		if (bestIndex == -1 || fitness > bestFitness) {
-			bestIndex = i;
-			bestFitness = fitness;
-		}
+	find_best_individual(population, fitness_function, &bestIndex, &bestFitness);
+
+	if (PRINT_BEST) {
+		print_key((population[bestIndex]), bestFitness);
 	}
-	
+
 	for (i = 0; i < NP; i++)
 	{
 
@@ -374,11 +691,19 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 	TPassword population[NP] {0};
 	TPassword new_population[NP] {0};
 	TPassword *current_population_array;
-	std::function<double(TPassword&)> fitness_lambda = [](TPassword& psw) {return fitness_custom(psw, *reference_password); };
+	//std::function<double(TPassword&)> fitness_lambda = [](TPassword& psw) {return fitness_custom_linear(psw, *reference_password); };
+	std::function<double(TPassword&)> fitness_lambda = [](TPassword& psw) {return fitness_custom_bit_diff(psw); };
+	//std::function<double(TPassword&)> fitness_lambda = [&encrypted, &reference](TPassword& psw) {return fitness(psw, encrypted, reference); };
 
 	std::cout << "Creating first population " << std::endl;
 	create_first_population(population);
 	std::cout << "First population created " << std::endl;
+
+	/*for (testing_key[0] = 0; testing_key[0] < 255; testing_key[0]++) {
+		print_key(testing_key, fitness_lambda(testing_key));
+	}
+
+	return false;*/
 
 	// keep evolving till the key is guessed or max number of generations is reached
 	while (generation < GENERATIONS && !done) {
@@ -413,9 +738,11 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 
 		// use current array as source of evolution and old array as destination of evolution
 		if (generation % 2 == 0) {
+			//evolution_parallel(population, new_population, encrypted, reference, fitness_lambda);
 			evolution(population, new_population, encrypted, reference, fitness_lambda);
 		}
 		else {
+			//evolution_parallel(new_population, population, encrypted, reference, fitness_lambda);
 			evolution(new_population, population, encrypted, reference, fitness_lambda);
 		}
 		
