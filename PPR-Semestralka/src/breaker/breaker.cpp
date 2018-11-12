@@ -20,7 +20,7 @@
 
 const bool PRINT_KEY = false;
 
-const bool PRINT_BEST = false;
+const bool PRINT_BEST = true;
 
 // passwords of various length for testing
 // hex form of full password: 0x68 0x65 0x6C 0x6C 0x6F 0x31 0x32 0x34 0x35
@@ -585,12 +585,14 @@ void process_evolution_batch(evolution_batch& ev_batch, const std::function<doub
 void evolution_parallel(TPassword* population, TPassword* new_population, TBlock& encrypted, const TBlock& reference, const std::function<double(TPassword&)> fitness_function) {
 	int i = 0;
 	int j = 0;
+	int k = 0;
 	int bestIndex = -1;
 	double bestFitness = 0;
 	evolution_batch ev_batch;
 	evolution_batch ev_batch_2;
-	evolution_batch batches[2];
-	size_t batch_size = 2;
+	// todo: rename
+	const size_t batch_count = 5;
+	evolution_batch batches[batch_count];
 
 	ev_batch.new_population = new_population;
 
@@ -599,29 +601,31 @@ void evolution_parallel(TPassword* population, TPassword* new_population, TBlock
 	if (PRINT_BEST) {
 		print_key((population[bestIndex]), bestFitness);
 	}
-	prepare_bestvector_for_batch(population[bestIndex], ev_batch);
-	prepare_bestvector_for_batch(population[bestIndex], ev_batch_2);
-
-	for (i = 0; i < NP; i += BATCH_SIZE*2) 
+	for (i = 0; i < batch_count; i++)
 	{
-		ev_batch.batch_index = i;
-		ev_batch_2.batch_index = i+BATCH_SIZE;
-		// prepare batch of individuals, their randoms
-		prepare_evolution_batch(population, fitness_function, ev_batch);
+		prepare_bestvector_for_batch(population[bestIndex], batches[i]);
+	}
 
-		prepare_evolution_batch(population, fitness_function, ev_batch_2);
-		batches[0] = ev_batch;
-		batches[1] = ev_batch_2;
+	for (i = 0; i < NP; i += BATCH_SIZE*batch_count) 
+	{
+		// prepare batches
+		for (j = 0; j < batch_count; j++)
+		{
+			batches[j].batch_index = i + j * BATCH_SIZE;
+			prepare_evolution_batch(population, fitness_function, batches[j]);
+		}
 
-		// do stuff with the batch
-		tbb::parallel_for(size_t(0), batch_size, [&batches, &fitness_function]( size_t(i)) {
+		// do stuff with the batches
+		tbb::parallel_for(size_t(0), batch_count, [&batches, &fitness_function]( size_t(i)) {
 			process_evolution_batch(batches[i], fitness_function);
 		});
 
-		// new population
-		for (j = 0; j < BATCH_SIZE; j++) {
-			copy_individual(new_population[i + j], batches[0].new_pop[j]);
-			copy_individual(new_population[i + BATCH_SIZE + j], batches[1].new_pop[j]);
+		// results from proccessed batches
+		for (j = 0; j < batch_count; j++) {
+			for ( k = 0; k < batch_count; k++)
+			{
+				copy_individual(new_population[i + j*BATCH_SIZE + k], batches[j].new_pop[k]);
+			}
 		}
 	}
 }
@@ -743,7 +747,7 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 				memcpy(password, testing_key, sizeof(TPassword));
 				copy_individual(password, current_population_array[i]);
 				print_key(current_population_array[i], fitness_lambda(current_population_array[i]));
-				std::cout << "Done in " << generation << "!" << std::endl;
+				std::cout << "Done in " << std::to_string(generation) << "!" << std::endl;
 				done = true;
 				break;
 			}
