@@ -75,6 +75,9 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LibraryPath>$(VC_LibraryPath_x64);$(WindowsSDK_LibraryPath_x64);$(NETFXKitsDir)Lib\um\x64;d:\users\zdenda\prg\intel-tbb\tbb2019_20181010oss\lib\intel64\vc14\</LibraryPath>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <LibraryPath>D:\users\zdenda\prg\intel-tbb\tbb2019_20181010oss\lib\ia32\vc14;$(LibraryPath)</LibraryPath>
+  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
@@ -131,7 +134,9 @@
     <ClInclude Include="src\breaker.h" />
     <ClInclude Include="src\skipjack.h" />
     <ClInclude Include="src\tbb\tbb.h" />
+    <ClInclude Include="src\vectorclass\instrset.h" />
     <ClInclude Include="src\vectorclass\vectorclass.h" />
+    <ClInclude Include="src\vectorclass\vectorf256.h" />
     <ClInclude Include="src\vectorclass\vectori128.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

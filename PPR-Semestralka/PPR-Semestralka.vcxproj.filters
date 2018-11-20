@@ -41,5 +41,11 @@
     <ClInclude Include="src\vectorclass\vectori128.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\vectorclass\instrset.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\vectorclass\vectorf256.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
