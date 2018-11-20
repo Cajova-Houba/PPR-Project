@@ -38,5 +38,8 @@
     <ClInclude Include="src\tbb\tbb.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\vectorclass\vectori128.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
