@@ -14,12 +14,12 @@
 #include <emmintrin.h>
 
 // library for SIMD
-#include "../vectorclass/vectorclass.h"
+//#include "../vectorclass/vectorclass.h"
 
 // intel TBB
 //#include "../tbb/tbb.h"
 
-const bool USE_PARALLEL = false;
+const bool USE_PARALLEL = true;
 
 const bool PRINT_KEY = false;
 
@@ -164,7 +164,7 @@ double fitness_custom_bit_diff(const TPassword& individual) {
 	double fit = 0;
 	int i = 0;
 	byte xorRes;
-	std::bitset<D> bs;
+	std::bitset<8> bs;
 
 	for (i = 0; i < D; i++) {
 		xorRes = individual[i] ^ (*reference_password)[i];
@@ -308,30 +308,39 @@ void mutation_best_2(TPassword& res, const TPassword& best, const TPassword& vec
 
 	// following loop is replaced with vector library
 	 for (i = 0; i < D; i++) {
-		 res[i] = (byte)( best[i] + F * (vec1[i] + vec2[i] - vec3[i] - vec4[i]));
+		 float tmp = (best[i] + F * (vec1[i] + vec2[i] - vec3[i] - vec4[i]));
+		 int r = (int)tmp;
+		 res[i] = (byte)r;
 	 }
 }
 
+/*
+	Provede mutaci best-2.
+	diff_vec = (vec1 + vec2 - vec3 - vec4) * F
+	noise_vec = diff_vec + best
+
+	Kde vec1 ... vec2 jsou nahodne vybrane, nestejne prvky z populace a best je nejlepsi jedinec ze soucaasne populace.
+*/
 void mutation_best_2_my_vec(TPassword& res, const TPassword& best, TPassword& vec1, TPassword& vec2, TPassword& vec3, TPassword& vec4) {
 	size_t i = 0;
 
 	// tmp arrays for working with bytes as floats
-	__int32 v1f[12];
-	__int32 v2f[12];
-	__int32 v3f[12];
-	__int32 v4f[12];
-	__int32 vbf[12];
+	__int32 v1f[12] {};
+	__int32 v2f[12] {};
+	__int32 v3f[12] {};
+	__int32 v4f[12] {};
+	float vbf[12] {};
 
 	// __m128 is 128 bit length vector which can take 4 32-bit floats
 	// lower 4, mid 4 and high 4
-	__m128i res_v1, res_v2, res_v3,
-		v1_1, v1_2, v1_3,
-		v2_1, v2_2, v2_3,
-		v3_1, v3_2, v3_3,
-		v4_1, v4_2, v4_3,
-		vb_1, vb_2, vb_3;
+	__m128i res_v1{}, res_v2{}, res_v3{},
+		v1_1{}, v1_2{}, v1_3{},
+		v2_1{}, v2_2{}, v2_3{},
+		v3_1{}, v3_2{}, v3_3{},
+		v4_1{}, v4_2{}, v4_3{};
 
-	__m128 tmp_1, tmp_2, tmp_3;
+	__m128 tmp_1{}, tmp_2{}, tmp_3{},
+		vb_1{}, vb_2{}, vb_3{};
 
 	// help vector with F constant for multiplying
 	float f_vec[]{ F,F,F,F };
@@ -344,25 +353,25 @@ void mutation_best_2_my_vec(TPassword& res, const TPassword& best, TPassword& ve
 		v2f[i] = (__int32)vec2[i];
 		v3f[i] = (__int32)vec3[i];
 		v4f[i] = (__int32)vec4[i];
-		vbf[i] = (__int32)best[i];
+		vbf[i] = (float)best[i];
 	}
 
 	// now load it to vectors
-	v1_1 = _mm_loadu_si32(v1f);
-	v1_2 = _mm_loadu_si32(v1f + 4);
-	v1_3 = _mm_loadu_si32(v1f + 8);
-	v2_1 = _mm_loadu_si32(v2f);
-	v2_2 = _mm_loadu_si32(v2f + 4);
-	v2_3 = _mm_loadu_si32(v2f + 8);
-	v3_1 = _mm_loadu_si32(v3f);
-	v3_2 = _mm_loadu_si32(v3f + 4);
-	v3_3 = _mm_loadu_si32(v3f + 8);
-	v4_1 = _mm_loadu_si32(v4f);
-	v4_2 = _mm_loadu_si32(v4f + 4);
-	v4_3 = _mm_loadu_si32(v4f + 8);
-	vb_1 = _mm_loadu_si32(vbf);
-	vb_2 = _mm_loadu_si32(vbf + 4);
-	vb_3 = _mm_loadu_si32(vbf + 8);
+	v1_1 = _mm_loadu_si128((const __m128i*)v1f);
+	v1_2 = _mm_loadu_si128((const __m128i*)(v1f + 4));
+	v1_3 = _mm_loadu_si128((const __m128i*)(v1f + 8));
+	v2_1 = _mm_loadu_si128((const __m128i*)v2f);
+	v2_2 = _mm_loadu_si128((const __m128i*)(v2f + 4));
+	v2_3 = _mm_loadu_si128((const __m128i*)(v2f + 8));
+	v3_1 = _mm_loadu_si128((const __m128i*)v3f);
+	v3_2 = _mm_loadu_si128((const __m128i*)(v3f + 4));
+	v3_3 = _mm_loadu_si128((const __m128i*)(v3f + 8));
+	v4_1 = _mm_loadu_si128((const __m128i*)v4f);
+	v4_2 = _mm_loadu_si128((const __m128i*)(v4f + 4));
+	v4_3 = _mm_loadu_si128((const __m128i*)(v4f + 8));
+	vb_1 = _mm_loadu_ps(vbf);
+	vb_2 = _mm_loadu_ps(vbf + 4);
+	vb_3 = _mm_loadu_ps(vbf + 8);
 
 	// res = v1 + v2
 	res_v1 = _mm_add_epi32(v1_1, v2_1);
@@ -383,9 +392,9 @@ void mutation_best_2_my_vec(TPassword& res, const TPassword& best, TPassword& ve
 	tmp_3 = _mm_mul_ps(f_vector, _mm_cvtepi32_ps(res_v3));
 
 	// res = best + tmp
-	res_v1 = _mm_add_epi32(vb_1, _mm_cvtps_epi32(tmp_1));
-	res_v2 = _mm_add_epi32(vb_2, _mm_cvtps_epi32(tmp_2));
-	res_v3 = _mm_add_epi32(vb_3, _mm_cvtps_epi32(tmp_3));
+	tmp_1 = _mm_add_ps(vb_1, tmp_1);
+	tmp_2 = _mm_add_ps(vb_2, tmp_2);
+	tmp_3 = _mm_add_ps(vb_3, tmp_3);
 
 	// __m128i is 128 bit length vector which can take 4 32-bit integers
 	// lower 4, mid 4 and high 4
@@ -416,62 +425,18 @@ void mutation_best_2_my_vec(TPassword& res, const TPassword& best, TPassword& ve
 	{
 		//res[i] = res_v.m128i_u8[i];
 	}
-	res[0] = (byte)res_v1.m128i_i32[0];
-	res[1] = (byte)res_v1.m128i_i32[1];
-	res[2] = (byte)res_v1.m128i_i32[2];
-	res[3] = (byte)res_v1.m128i_i32[3];
-	res[4] = (byte)res_v2.m128i_i32[0];
-	res[5] = (byte)res_v2.m128i_i32[1];
-	res[6] = (byte)res_v2.m128i_i32[2];
-	res[7] = (byte)res_v2.m128i_i32[3];
-	res[8] = (byte)res_v3.m128i_i32[0];
-	res[9] = (byte)res_v3.m128i_i32[1];
+	res[0] = (byte)tmp_1.m128_f32[0];
+	res[1] = (byte)tmp_1.m128_f32[1];
+	res[2] = (byte)tmp_1.m128_f32[2];
+	res[3] = (byte)tmp_1.m128_f32[3];
+	res[4] = (byte)tmp_2.m128_f32[0];
+	res[5] = (byte)tmp_2.m128_f32[1];
+	res[6] = (byte)tmp_2.m128_f32[2];
+	res[7] = (byte)tmp_2.m128_f32[3];
+	res[8] = (byte)tmp_3.m128_f32[0];
+	res[9] = (byte)tmp_3.m128_f32[1];
 }
 
-/*
-	Provede mutaci best-2.
-	diff_vec = (vec1 + vec2 - vec3 - vec4) * F
-	noise_vec = diff_vec + best
-	
-	Kde vec1 ... vec2 jsou nahodne vybrane, nestejne prvky z populace a best je nejlepsi jedinec ze soucaasne populace.
-*/
-void mutation_best_2_vec(TPassword& res, const TPassword& best, TPassword& vec1, TPassword& vec2, TPassword& vec3, TPassword& vec4) {
-	bool use_my_vectors = false;
-	TPassword res_tmp{ 0,0,0,0,0,0,0,0,0,0 };
-	TPassword res_tmp_2{ 0,0,0,0,0,0,0,0,0,0 };
-
-	mutation_best_2_my_vec(res_tmp, best, vec1, vec2, vec3, vec4);
-
-	if (use_my_vectors) {
-		mutation_best_2_my_vec(res, best, vec1, vec2, vec3, vec4);
-	}
-	else {
-		// Vec16uc = unsigned int with length of 8 bits, it can store 16 elements
-		Vec16uc v1, v2, v3, v4, vb;
-
-		// Vec16f has single floating point precision and can take 16 elemenets
-		Vec16uc res_v;
-
-		// load vectors
-		vb.load(best);
-		v1.load(vec1);
-		v2.load(vec2);
-		v3.load(vec3);
-		v4.load(vec4);
-
-		// following loop is replaced with vector library
-		// for (i = 0; i < D; i++) {
-		//	 res[i] = best[i] + F * (vec1[i] + vec2[i] - vec3[i] - vec4[i]);
-		// }
-		res_v = vb + F * (v1 + v2 - v3 - v4);
-		//res_v = vb + (v1 + v2 - v3 - v4);
-		res_v.store_partial(D, res);
-		res_v.store_partial(D, res_tmp_2);
-	}
-
-	std::cout << std::to_string(res_tmp[0]) << std::endl;
-	std::cout << std::to_string(res_tmp_2[0]) << std::endl;
-}
 
 void binomic_cross(TPassword& res, const TPassword& active_individual, const TPassword& noise_vector) {
 	double random_val = 0;
@@ -491,7 +456,7 @@ void binomic_cross(TPassword& res, const TPassword& active_individual, const TPa
 
 void copy_individual(TPassword& dest, const TPassword& src) {
 	int i = 0;
-	std::copy(src, src + D, dest);
+		std::copy(src, src + D, dest);
 }
 
 /*
@@ -583,14 +548,14 @@ void prepare_bestvector_for_batch(TPassword& best_vector, evolution_batch& ev_ba
 
 void process_evolution_batch(evolution_batch& ev_batch, const std::function<double(TPassword&)> fitness_function) {
 	int act_ind_cntr = 0;
-	TPassword noise_vec;
-	TPassword res_vec;
+	TPassword noise_vec = { 0 };
+	TPassword res_vec = { 0 };
 	double new_score, active_score;
 
 	for (act_ind_cntr = 0; act_ind_cntr < BATCH_SIZE; act_ind_cntr++)
 	{
 		// mutation 
-		mutation_best_2_vec(noise_vec, ev_batch.best_individual,
+		mutation_best_2_my_vec(noise_vec, ev_batch.best_individual,
 			ev_batch.random_individuals[act_ind_cntr][0],
 			ev_batch.random_individuals[act_ind_cntr][1],
 			ev_batch.random_individuals[act_ind_cntr][2],
@@ -646,16 +611,17 @@ void evolution_parallel(TPassword* population, TPassword* new_population, TBlock
 		{
 			batches[j].batch_index = i + j * BATCH_SIZE;
 			prepare_evolution_batch(population, fitness_function, batches[j]);
+			process_evolution_batch(batches[j], fitness_function);
 		}
 
 		// do stuff with the batches
 		/*tbb::parallel_for(size_t(0), batch_count, [&batches, &fitness_function]( size_t(i)) {
 			process_evolution_batch(batches[i], fitness_function);
 		});*/
-		for (size_t p = 0; i < batch_count; i++)
-		{
-			process_evolution_batch(batches[i], fitness_function);
-		}
+		//for (size_t p = 0; p < batch_count; p++)
+		//{
+		//	process_evolution_batch(batches[p], fitness_function);
+		//}
 
 		// results from proccessed batches
 		for (j = 0; j < batch_count; j++) {
@@ -710,8 +676,12 @@ void evolution(TPassword* population, TPassword* new_population, TBlock& encrypt
 		randomly_picked_3 = &(population[rand3]);
 		randomly_picked_4 = &(population[rand4]);
 
-		//mutation_rand_1(noise_vector, *randomly_picked_1, *randomly_picked_2, *randomly_picked_3);
-		mutation_best_2(noise_vector, population[best_index], *randomly_picked_1, *randomly_picked_2, *randomly_picked_3, *randomly_picked_4);
+		if (USE_PARALLEL) {
+			mutation_best_2_my_vec(noise_vector, population[best_index], *randomly_picked_1, *randomly_picked_2, *randomly_picked_3, *randomly_picked_4);
+		}
+		else {
+			mutation_best_2(noise_vector, population[best_index], *randomly_picked_1, *randomly_picked_2, *randomly_picked_3, *randomly_picked_4);
+		}
 
 
 
@@ -750,14 +720,14 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 	//std::function<double(TPassword&)> fitness_lambda = [&encrypted, &reference](TPassword& psw) {return fitness(psw, encrypted, reference); };
 
 	// pointer to evolution function
-	void(*evolution_function)(TPassword*, TPassword*, TBlock&, const TBlock&, const std::function<double(TPassword&)>);
+	void(*evolution_function)(TPassword*, TPassword*, TBlock&, const TBlock&, const std::function<double(TPassword&)>) = evolution;
 
-	if (USE_PARALLEL) {
-		evolution_function = evolution_parallel;
-	}
-	else {
-		evolution_function = evolution;
-	}
+	//if (USE_PARALLEL) {
+	//	evolution_function = evolution_parallel;
+	//}
+	//else {
+	//	evolution_function = evolution;
+	//}
 
 
 	//std::cout << "Creating first population " << std::endl;
