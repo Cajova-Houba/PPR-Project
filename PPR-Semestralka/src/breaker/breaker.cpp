@@ -11,18 +11,68 @@
 #include <bitset>
 #include <cstdio>
 #include <functional>
+
+// vectors
 #include <emmintrin.h>
 
-// library for SIMD
-//#include "../vectorclass/vectorclass.h"
-
 // intel TBB
-//#include "../tbb/tbb.h"
+#include "../tbb/tbb.h"
 
+// Declaration of functions used by ApplyEvolutionStep.
+void pick_four_random(int* r1, int* r2, int* r3, int* r4);
+void process_individual(TPassword& res, const TPassword& individual, const TPassword& v1, const TPassword& v2, const TPassword& v3, const TPassword& v4, const TPassword& vb);
+
+//===============================================
+// Functor for tbb::parallel_for. Performs 
+// evolution step over population chunk.
+//===============================================
+class ApplyEvolutionStep {
+public:
+	ApplyEvolutionStep(TPassword population[], TPassword new_population[], TPassword& best_vector) :
+		population(population), new_population(new_population), best_vector(best_vector)
+	{}
+
+	void operator() (const tbb::blocked_range<size_t>& r) const {
+		int rand1, rand2, rand3, rand4;
+		TPassword* randomly_picked_1;
+		TPassword* randomly_picked_2;
+		TPassword* randomly_picked_3;
+		TPassword* randomly_picked_4;
+		TPassword* pop = population;
+		TPassword* new_pop = new_population;
+
+		for (size_t i = r.begin(); i != r.end(); i++)
+		{
+			pick_four_random(&rand1, &rand2, &rand3, &rand4);
+			randomly_picked_1 = &(population[rand1]);
+			randomly_picked_2 = &(population[rand2]);
+			randomly_picked_3 = &(population[rand3]);
+			randomly_picked_4 = &(population[rand4]);
+
+			process_individual(new_pop[i], pop[i],
+				*randomly_picked_1,
+				*randomly_picked_2,
+				*randomly_picked_3,
+				*randomly_picked_4,
+				best_vector);
+		}
+	}
+
+private:
+	TPassword *const population;
+	TPassword *const new_population;
+	const TPassword& best_vector;
+};
+
+
+
+//===============================================
+// PROGRAM CONSTANTS
+//===============================================
+//
+// program control
 const bool USE_PARALLEL = true;
-
 const bool PRINT_KEY = false;
-
 const bool PRINT_BEST = false;
 
 // passwords of various length for testing
@@ -41,26 +91,6 @@ const TPassword* reference_password = &reference_password_10;
 
 // custom fitness function constants
 const double MAX_BIT_DIFF = 10 * 8;
-const double MAX_DIFF = 806.38080334294;
-
-// differential evolutions constants
-// mutacni konstanta rec: 0.3 - 0.9
-// interval [0, 2]
-const double F = 0.3;
-
-// prah krizeni 0.8 - 0.9
-// cim mene, tim vice krizeni
-const double CR = 0.5;
-
-// dimenze reseneo problemu = delka hesla
-const int D = 10;
-
-// pocet jedincu v populaci 10*D - 100*D
-const int NP = 420 * D;
-
-// pocet evolucnich cyklu
-// pak bude alg ukoncen
-const double GENERATIONS = 800;
 
 // length of TBlock
 const int BLOCK_SIZE = 8;
@@ -70,46 +100,52 @@ const int BLOCK_SIZE = 8;
 // G_S je šíøka kopce
 const int G_A = 500;
 const int G_S = 15;
-
-// number of items in one batch for parallel_for
-const int BATCH_SIZE = 6;
-
-// number of vectors to store 4 individuals
-const int VEC_LEN = 4;
-
-/*
-	One batch of stuff for evolution.
-*/
-struct evolution_batch {
-	int batch_index;
-
-	// pointer to array to store new population to
-	// array can be indexed from batch_index to batch_index + 5
-	TPassword *new_population;
-
-	TPassword new_pop[BATCH_SIZE];
-
-	// index of best individual
-	int best_individual_index;
-
-	TPassword best_individual;
-	
-	// active individuals for this batch
-	TPassword active_individuals[BATCH_SIZE];
-
-	// 4 random individuals for every batch
-	int random_individual_indexes[BATCH_SIZE][VEC_LEN];
-	TPassword random_individuals[BATCH_SIZE][VEC_LEN];
-};
+//===============================================
 
 
+
+//===============================================
+// DIFFERENTIAL EVOLUTION CONSTANTS
+//===============================================
+//
+// mutation constant, recommended values: 0.3 - 0.9
+// should be in interval [0, 2]
+const double F = 0.3;
+
+// cross constant, recommended values: 0.8 - 0.9
+// low value -> more crossing
+const double CR = 0.5;
+
+// dimension of one individual = password length
+const int D = 10;
+
+// population size, recommended: 10*D - 100*D
+const int NP = 420 * D;
+
+// max number of generations
+const double GENERATIONS = 800;
+//===============================================
+
+
+
+//===============================================
+// OTHER GLOBAL VARIABLES
+//===============================================
 // generator nahodnych cisel
-std::mt19937 generator(123);
+std::random_device trng;
+std::mt19937 generator(trng());
 std::uniform_int_distribution<int> param_value_distribution(0, 255);
 std::uniform_int_distribution<int> population_picker_distribution(0, NP);
 std::uniform_real_distribution<double> cross_distribution(0, 1);
+//===============================================
 
 
+
+//===============================================
+// PRINT FUNCTIONS
+//===============================================
+
+// Prints one TBlock in hex.
 void print_block(const TBlock& block) {
 	int i = 0;
 	for (i = 0; i < BLOCK_SIZE; i++) {
@@ -118,6 +154,7 @@ void print_block(const TBlock& block) {
 	std::cout << std::endl;
 }
 
+// Prints TPassword and its' score.
 void print_key(const TPassword& key, const double score) {
 	int i = 0;
 	for (i = 0; i < D; i++) {
@@ -125,6 +162,13 @@ void print_key(const TPassword& key, const double score) {
 	}
 	std::cout << "\t;" << score << std::endl;
 }
+//===============================================
+
+
+
+//===============================================
+// EVOLUTION FUNCTIONS
+//===============================================
 
 #pragma region fitness_functions
 /*
@@ -198,23 +242,6 @@ double fitness_custom_gauss(const TPassword& individual) {
 	}
 
 	return G_A * std::exp(fit);
-}
-
-/*
-	How close is individual to reference. This is not good for higher dimensions as wrong
-	individuals still can get pretty high score.
-*/
-double fitness_custom_linear(const TPassword& individual, const TPassword& reference) {
-	double dist = 0;
-	// max value of custom fitness function
-	const double max = MAX_DIFF;
-	//const double max = 216;
-	int i = 0;
-	for (i = 0; i < D; i++) {
-		dist += pow(individual[i] - reference[i], 2);
-	}
-		
-	return max - sqrt(dist);
 }
 
 /*
@@ -321,7 +348,28 @@ void mutation_best_2(TPassword& res, const TPassword& best, const TPassword& vec
 
 	Kde vec1 ... vec2 jsou nahodne vybrane, nestejne prvky z populace a best je nejlepsi jedinec ze soucaasne populace.
 */
-void mutation_best_2_my_vec(TPassword& res, const TPassword& best, TPassword& vec1, TPassword& vec2, TPassword& vec3, TPassword& vec4) {
+void mutation_best_2_my_vec(TPassword& res, const TPassword& best, const TPassword& vec1, const TPassword& vec2,  const TPassword& vec3, const TPassword& vec4) {
+	//__m128i vb{}, v1{}, v2{}, v3{}, v4{};
+	//__m128i res_vec{};
+	//__m128 tmp1{}, tmp2{}, tmp3;
+
+	////// help vector with F constant for multiplying
+	//float f_vec[]{ F,F,F,F };
+	//__m128 f_vector = _mm_loadu_ps(f_vec);
+
+	//// load stuff
+	//vb = _mm_loadu_si128((const __m128i*)best);
+	//v1 = _mm_loadu_si128((const __m128i*)vec1);
+	//v2 = _mm_loadu_si128((const __m128i*)vec2);
+	//v3 = _mm_loadu_si128((const __m128i*)vec3);
+	//v4 = _mm_loadu_si128((const __m128i*)vec4);
+
+	//res_vec = _mm_adds_epi8(v1, v2);
+	//res_vec = _mm_subs_epi8(res_vec, v3);
+	//res_vec = _mm_subs_epi8(res_vec, v4);
+
+	//tmp1 = _mm_loadu()
+
 	size_t i = 0;
 
 	// tmp arrays for working with bytes as floats
@@ -495,10 +543,9 @@ void find_best_individual(TPassword* population, const std::function<double(TPas
 	*best_index = b_i;
 	*best_score = b_s;
 }
-#pragma endregion
 
 
-void prick_four_random(int* r1, int* r2, int* r3, int* r4) {
+void pick_four_random(int* r1, int* r2, int* r3, int* r4) {
 	int rand1, rand2, rand3, rand4;
 	rand1 = population_picker_distribution(generator);
 	rand2 = rand1;
@@ -519,118 +566,68 @@ void prick_four_random(int* r1, int* r2, int* r3, int* r4) {
 	*r3 = rand3;
 	*r4 = rand4;
 }
+#pragma endregion
 
-/*
-	Prepares one batch for evolution's parallel for.
-	Transforms active individuals and their randoms to vectors.
-*/
-void prepare_evolution_batch(TPassword* population, const std::function<double(TPassword&)> fitness_function, evolution_batch& ev_batch) {
-	int i = 0;
-	int rand1, rand2, rand3, rand4;
-	for (i = 0; i < BATCH_SIZE; i++)
-	{
-		copy_individual(ev_batch.active_individuals[i], (population[ev_batch.batch_index + i]));
-		//ev_batch.active_individuals[i] = &(population[ev_batch.batch_index + i]);
 
-		// pick four different randoms
-		prick_four_random(&rand1, &rand2, &rand3, &rand4);
-		
-		copy_individual(ev_batch.random_individuals[i][0], population[rand1]);
-		copy_individual(ev_batch.random_individuals[i][1], population[rand2]);
-		copy_individual(ev_batch.random_individuals[i][2], population[rand3]);
-		copy_individual(ev_batch.random_individuals[i][3], population[rand4]);
+//
+// Performs evolution of one individual. Result (either old individual or new individual) is copied to res.
+//
+void process_individual(TPassword& res, const TPassword& individual, const TPassword& v1, const TPassword& v2, const TPassword& v3, const TPassword& v4, const TPassword& vb) {
+	TPassword noise_vec{};
+	TPassword res_vec{};
+	double individual_score = 0,
+		new_score = 0;
+
+	// fitness of the current individual
+	individual_score = fitness_custom_bit_diff(individual);
+
+	// evolution = mutation + cross
+	mutation_best_2_my_vec(noise_vec, vb,
+		v1, v2, v3, v4);
+	binomic_cross(res_vec, individual, noise_vec);
+
+	// use better one
+	new_score = fitness_custom_bit_diff(res_vec);
+	if (new_score > individual_score) {
+		copy_individual(res, res_vec);
+	}
+	else {
+		copy_individual(res, individual);
 	}
 }
 
-void prepare_bestvector_for_batch(TPassword& best_vector, evolution_batch& ev_batch) {
-	copy_individual(ev_batch.best_individual, best_vector);
-}
-
-void process_evolution_batch(evolution_batch& ev_batch, const std::function<double(TPassword&)> fitness_function) {
-	int act_ind_cntr = 0;
-	TPassword noise_vec = { 0 };
-	TPassword res_vec = { 0 };
-	double new_score, active_score;
-
-	for (act_ind_cntr = 0; act_ind_cntr < BATCH_SIZE; act_ind_cntr++)
-	{
-		// mutation 
-		mutation_best_2_my_vec(noise_vec, ev_batch.best_individual,
-			ev_batch.random_individuals[act_ind_cntr][0],
-			ev_batch.random_individuals[act_ind_cntr][1],
-			ev_batch.random_individuals[act_ind_cntr][2],
-			ev_batch.random_individuals[act_ind_cntr][3]
-		);
-
-		// cross
-		binomic_cross(res_vec, ev_batch.active_individuals[act_ind_cntr], noise_vec);
-
-		// add to new pop
-		new_score = fitness_function(res_vec);
-		active_score = fitness_function(ev_batch.active_individuals[act_ind_cntr]);
-		if (new_score > active_score) {
-			// use crossed_vector for new population
-			copy_individual(ev_batch.new_pop[act_ind_cntr], res_vec);
-		}
-		else {
-			// use active_score for new population
-			copy_individual(ev_batch.new_pop[act_ind_cntr], ev_batch.active_individuals[act_ind_cntr]);
-		}
-
-	}
-}
-
-/*
-	Same as evolution(...) but uses parallel for and vector instructions.
-	Vec16uc is used for vector type as two vectors can fit 3 individuals. One batch of parallel_for is 
-	2 vectors -> 6 individuals.
-*/
+//
+//	Performs evolution over population array while using parallelism.
+//
 void evolution_parallel(TPassword* population, TPassword* new_population, TBlock& encrypted, const TBlock& reference, const std::function<double(TPassword&)> fitness_function) {
-	int i = 0;
-	int j = 0;
-	int k = 0;
-	int best_index = -1;
+	size_t i = 0;
 	double best_fitness = 0;
-	const size_t batch_count = 5;
-	evolution_batch batches[batch_count];
+	int best_index = 0;
+	int rand1, rand2, rand3, rand4;
+	TPassword* randomly_picked_1;
+	TPassword* randomly_picked_2;
+	TPassword* randomly_picked_3;
+	TPassword* randomly_picked_4;
 
-	// best individual, this will be the same for whole evolution cycle
 	find_best_individual(population, fitness_function, &best_index, &best_fitness);
-	if (PRINT_BEST) {
-		print_key((population[best_index]), best_fitness);
-	}
-	for (i = 0; i < batch_count; i++)
-	{
-		prepare_bestvector_for_batch(population[best_index], batches[i]);
-	}
 
-	for (i = 0; i < NP; i += BATCH_SIZE*batch_count) 
-	{
-		// prepare batches
-		for (j = 0; j < batch_count; j++)
-		{
-			batches[j].batch_index = i + j * BATCH_SIZE;
-			prepare_evolution_batch(population, fitness_function, batches[j]);
-			process_evolution_batch(batches[j], fitness_function);
-		}
+	//for (i = 0; i < NP; i++)
+	//{
+	//	prick_four_random(&rand1, &rand2, &rand3, &rand4);
+	//	randomly_picked_1 = &(population[rand1]);
+	//	randomly_picked_2 = &(population[rand2]);
+	//	randomly_picked_3 = &(population[rand3]);
+	//	randomly_picked_4 = &(population[rand4]);
 
-		// do stuff with the batches
-		/*tbb::parallel_for(size_t(0), batch_count, [&batches, &fitness_function]( size_t(i)) {
-			process_evolution_batch(batches[i], fitness_function);
-		});*/
-		//for (size_t p = 0; p < batch_count; p++)
-		//{
-		//	process_evolution_batch(batches[p], fitness_function);
-		//}
+	//	process_individual(new_population[i], population[i],
+	//		*randomly_picked_1,
+	//		*randomly_picked_2,
+	//		*randomly_picked_3,
+	//		*randomly_picked_4,
+	//		population[best_index]);
+	//}
 
-		// results from proccessed batches
-		for (j = 0; j < batch_count; j++) {
-			for ( k = 0; k < batch_count; k++)
-			{
-				copy_individual(new_population[i + j*BATCH_SIZE + k], batches[j].new_pop[k]);
-			}
-		}
-	}
+	tbb::parallel_for(tbb::blocked_range<size_t>(0, NP), ApplyEvolutionStep(population, new_population, population[best_index]));
 }
 
 /*
@@ -670,18 +667,14 @@ void evolution(TPassword* population, TPassword* new_population, TBlock& encrypt
 		// active individual population[i]
 		active_individual = &(population[i]);
 
-		prick_four_random(&rand1, &rand2, &rand3, &rand4);
+		pick_four_random(&rand1, &rand2, &rand3, &rand4);
 		randomly_picked_1 = &(population[rand1]);
 		randomly_picked_2 = &(population[rand2]);
 		randomly_picked_3 = &(population[rand3]);
 		randomly_picked_4 = &(population[rand4]);
 
-		if (USE_PARALLEL) {
-			mutation_best_2_my_vec(noise_vector, population[best_index], *randomly_picked_1, *randomly_picked_2, *randomly_picked_3, *randomly_picked_4);
-		}
-		else {
-			mutation_best_2(noise_vector, population[best_index], *randomly_picked_1, *randomly_picked_2, *randomly_picked_3, *randomly_picked_4);
-		}
+		
+		mutation_best_2(noise_vector, population[best_index], *randomly_picked_1, *randomly_picked_2, *randomly_picked_3, *randomly_picked_4);
 
 
 
@@ -704,7 +697,11 @@ void evolution(TPassword* population, TPassword* new_population, TBlock& encrypt
 		}
 	}
 }
+//===============================================
 
+
+
+// Cipher breaker.
 bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &password) {
 	SJ_context context;
 	TBlock decrypted;
@@ -720,14 +717,14 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 	//std::function<double(TPassword&)> fitness_lambda = [&encrypted, &reference](TPassword& psw) {return fitness(psw, encrypted, reference); };
 
 	// pointer to evolution function
-	void(*evolution_function)(TPassword*, TPassword*, TBlock&, const TBlock&, const std::function<double(TPassword&)>) = evolution;
+	void(*evolution_function)(TPassword*, TPassword*, TBlock&, const TBlock&, const std::function<double(TPassword&)>);
 
-	//if (USE_PARALLEL) {
-	//	evolution_function = evolution_parallel;
-	//}
-	//else {
-	//	evolution_function = evolution;
-	//}
+	if (USE_PARALLEL) {
+		evolution_function = evolution_parallel;
+	}
+	else {
+		evolution_function = evolution;
+	}
 
 
 	//std::cout << "Creating first population " << std::endl;
