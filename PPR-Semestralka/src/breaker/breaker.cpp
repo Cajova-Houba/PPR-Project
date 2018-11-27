@@ -16,16 +16,16 @@
 #include <emmintrin.h>
 
 // intel TBB
-#include "../tbb/tbb.h"
+#include <tbb/tbb.h>
 
 // Declaration of functions used by ApplyEvolutionStep.
 void pick_four_random(int* r1, int* r2, int* r3, int* r4);
-void process_individual(TPassword& res, const TPassword& individual, const TPassword& v1, const TPassword& v2, const TPassword& v3, const TPassword& v4, const TPassword& vb);
+void process_individual(TPassword& res, TPassword& individual, const TPassword& v1, const TPassword& v2, const TPassword& v3, const TPassword& v4, const TPassword& vb);
 
-//===============================================
+//
 // Functor for tbb::parallel_for. Performs 
 // evolution step over population chunk.
-//===============================================
+//
 class ApplyEvolutionStep {
 public:
 	ApplyEvolutionStep(TPassword population[], TPassword new_population[], TPassword& best_vector) :
@@ -131,12 +131,18 @@ const double GENERATIONS = 800;
 //===============================================
 // OTHER GLOBAL VARIABLES
 //===============================================
-// generator nahodnych cisel
+// random number generator
 std::random_device trng;
 std::mt19937 generator(trng());
 std::uniform_int_distribution<int> param_value_distribution(0, 255);
 std::uniform_int_distribution<int> population_picker_distribution(0, NP);
 std::uniform_real_distribution<double> cross_distribution(0, 1);
+
+// encrypted block
+TBlock* encrypted_block;
+
+// reference block
+const TBlock* reference_block;
 //===============================================
 
 
@@ -171,6 +177,29 @@ void print_key(const TPassword& key, const double score) {
 //===============================================
 
 #pragma region fitness_functions
+//
+// # of different bits.
+//
+double fitness_diff(TPassword& individual) {
+	double fit = 0;
+	int i = 0;
+	TBlock decrypted;
+	SJ_context context;
+	byte xorRes;
+	std::bitset<8> bs;
+
+	makeKey(&context, individual, sizeof(TPassword));
+	decrypt_block(&context, decrypted, *encrypted_block);
+
+	for (i = 0; i < BLOCK_SIZE; i++) {
+		xorRes = *reference_block[i] ^ decrypted[i];
+		bs = (xorRes);
+		fit += bs.count();
+	}
+
+
+	return fit;
+}
 /*
 	This fitness function uses gaussian curve with the top being the best individual.
 
@@ -204,8 +233,9 @@ double fitness_gauss(TPassword& individual, TBlock& encrypted, const TBlock& ref
 /*
 	Bit difference of individual from reference password. The lower the number, the bigger the difference.
 */
-double fitness_custom_bit_diff(const TPassword& individual) {
-	double fit = 0;
+double fitness_custom_bit_diff(TPassword& individual) {
+	return fitness_diff(individual);
+	/*double fit = 0;
 	int i = 0;
 	byte xorRes;
 	std::bitset<8> bs;
@@ -217,31 +247,7 @@ double fitness_custom_bit_diff(const TPassword& individual) {
 	}
 
 
-	return MAX_BIT_DIFF - fit;
-}
-
-/*
-	How close is individual to reference. Uses gaussian 'hill' where the reference is on the top. 
-	The function has following format:
-	fit = a * e^(
-		-(v1-u1)^2 / (2*s^2)
-		-(v2-u2)^2 / (2*s^2)
-		-(v3-u3)^2 / (2*s^2)
-		...
-	)
-	Where a and s are standard parameters of gaussian function, v1..vn are components of individual which
-	is being tested and u1..un are components of reference block.
-*/
-double fitness_custom_gauss(const TPassword& individual) {
-	int i = 0;
-	double fit = 0;
-
-	for (i = 0; i < D; i++)
-	{
-		fit += -std::pow(individual[i] - (*reference_password)[i], 2) / (2 * G_S*G_S);
-	}
-
-	return G_A * std::exp(fit);
+	return MAX_BIT_DIFF - fit;*/
 }
 
 /*
@@ -266,46 +272,13 @@ double fitness(TPassword& individual, TBlock& encrypted, const TBlock &reference
 
 	return fit;
 }
-
-// fitness by # of different bites
-double fitness_diff(TPassword& individual, TBlock& encrypted, const TBlock &reference) {
-	double fit = 0;
-	int i = 0;
-	TBlock decrypted;
-	SJ_context context;
-	byte xorRes;
-	std::bitset<8> bs;
-
-	makeKey(&context, individual, sizeof(TPassword));
-	decrypt_block(&context, decrypted, encrypted);
-
-	for (i = 0; i < BLOCK_SIZE; i++) {
-		xorRes = reference[i] ^ decrypted[i];
-		bs = (xorRes);
-		fit += bs.count();
-	}
-
-
-	return fit;
-}
-
-double fitness_diff_inverse(TPassword& individual, TBlock& encrypted, const TBlock &reference) {
-	double fit_diff = fitness_diff(individual, encrypted, reference);
-	if (abs(fit_diff - 0) < 0.0000000001) {
-		return 0;
-	}
-	else {
-		return 1 / fit_diff;
-	}
-}
-
 #pragma endregion
 
 
 #pragma region evolution_helpers
-/*
-	Randomly gnerates one guy in population.
-*/
+//
+//	Randomly gnerates one guy in population.
+//
 void generate_individual(TPassword& guy) {
 	byte i = 0;
 
@@ -315,9 +288,9 @@ void generate_individual(TPassword& guy) {
 	}
 }
 
-/*
-	Generate first population of DE algorithm.
-*/
+//
+//	Generate first population of DE algorithm.
+//
 void create_first_population(TPassword *population) {
 	int i = 0;
 
@@ -327,10 +300,10 @@ void create_first_population(TPassword *population) {
 	}
 }
 
-/*
-	Same as mutation_best_2_vec but doesn't use vectors internaly.
-*/
-void mutation_best_2(TPassword& res, const TPassword& best, const TPassword& vec1, TPassword& vec2, TPassword& vec3, TPassword& vec4) {
+//
+//	Same as mutation_best_2_vec but doesn't use vectors internaly.
+//
+void mutation_best_2(TPassword& res, const TPassword& best, const TPassword& vec1, const TPassword& vec2, const TPassword& vec3, const TPassword& vec4) {
 	int i = 0;
 
 	// following loop is replaced with vector library
@@ -341,13 +314,13 @@ void mutation_best_2(TPassword& res, const TPassword& best, const TPassword& vec
 	 }
 }
 
-/*
-	Provede mutaci best-2.
-	diff_vec = (vec1 + vec2 - vec3 - vec4) * F
-	noise_vec = diff_vec + best
-
-	Kde vec1 ... vec2 jsou nahodne vybrane, nestejne prvky z populace a best je nejlepsi jedinec ze soucaasne populace.
-*/
+//
+//	Provede mutaci best-2.
+//	diff_vec = (vec1 + vec2 - vec3 - vec4) * F
+//	noise_vec = diff_vec + best
+//
+//	Kde vec1 ... vec2 jsou nahodne vybrane, nestejne prvky z populace a best je nejlepsi jedinec ze soucaasne populace.
+//
 void mutation_best_2_my_vec(TPassword& res, const TPassword& best, const TPassword& vec1, const TPassword& vec2,  const TPassword& vec3, const TPassword& vec4) {
 	//__m128i vb{}, v1{}, v2{}, v3{}, v4{};
 	//__m128i res_vec{};
@@ -507,9 +480,9 @@ void copy_individual(TPassword& dest, const TPassword& src) {
 		std::copy(src, src + D, dest);
 }
 
-/*
-	Compares two individuals and returns true if they're same.
-*/
+//
+//	Compares two individuals and returns true if they're same.
+//
 bool compare_individuals(TPassword& ind1, TPassword& ind2) {
 	int i = 0;
 	bool same = true;
@@ -522,9 +495,9 @@ bool compare_individuals(TPassword& ind1, TPassword& ind2) {
 	return same;
 }
 
-/*
-	Finds the best individual in the population and returns its index and score.
-*/
+//
+//	Finds the best individual in the population and returns its index and score.
+//
 void find_best_individual(TPassword* population, const std::function<double(TPassword&)> fitness_function, int* best_index, double* best_score) {
 	int i = 0;
 	double fitness = 0;
@@ -544,7 +517,9 @@ void find_best_individual(TPassword* population, const std::function<double(TPas
 	*best_score = b_s;
 }
 
-
+//
+//	Picks 4 different indexes in population.
+//
 void pick_four_random(int* r1, int* r2, int* r3, int* r4) {
 	int rand1, rand2, rand3, rand4;
 	rand1 = population_picker_distribution(generator);
@@ -572,7 +547,7 @@ void pick_four_random(int* r1, int* r2, int* r3, int* r4) {
 //
 // Performs evolution of one individual. Result (either old individual or new individual) is copied to res.
 //
-void process_individual(TPassword& res, const TPassword& individual, const TPassword& v1, const TPassword& v2, const TPassword& v3, const TPassword& v4, const TPassword& vb) {
+void process_individual(TPassword& res, TPassword& individual, const TPassword& v1, const TPassword& v2, const TPassword& v3, const TPassword& v4, const TPassword& vb) {
 	TPassword noise_vec{};
 	TPassword res_vec{};
 	double individual_score = 0,
@@ -582,7 +557,9 @@ void process_individual(TPassword& res, const TPassword& individual, const TPass
 	individual_score = fitness_custom_bit_diff(individual);
 
 	// evolution = mutation + cross
-	mutation_best_2_my_vec(noise_vec, vb,
+	/*mutation_best_2_my_vec(noise_vec, vb,
+		v1, v2, v3, v4);*/
+	mutation_best_2(noise_vec, vb,
 		v1, v2, v3, v4);
 	binomic_cross(res_vec, individual, noise_vec);
 
@@ -603,39 +580,20 @@ void evolution_parallel(TPassword* population, TPassword* new_population, TBlock
 	size_t i = 0;
 	double best_fitness = 0;
 	int best_index = 0;
-	int rand1, rand2, rand3, rand4;
-	TPassword* randomly_picked_1;
-	TPassword* randomly_picked_2;
-	TPassword* randomly_picked_3;
-	TPassword* randomly_picked_4;
 
 	find_best_individual(population, fitness_function, &best_index, &best_fitness);
 
-	//for (i = 0; i < NP; i++)
-	//{
-	//	prick_four_random(&rand1, &rand2, &rand3, &rand4);
-	//	randomly_picked_1 = &(population[rand1]);
-	//	randomly_picked_2 = &(population[rand2]);
-	//	randomly_picked_3 = &(population[rand3]);
-	//	randomly_picked_4 = &(population[rand4]);
-
-	//	process_individual(new_population[i], population[i],
-	//		*randomly_picked_1,
-	//		*randomly_picked_2,
-	//		*randomly_picked_3,
-	//		*randomly_picked_4,
-	//		population[best_index]);
-	//}
-
-	tbb::parallel_for(tbb::blocked_range<size_t>(0, NP), ApplyEvolutionStep(population, new_population, population[best_index]));
+	tbb::parallel_for(tbb::blocked_range<size_t>(0, NP), 
+		ApplyEvolutionStep(population, new_population, population[best_index])
+	);
 }
 
-/*
-	Performs one cycle of evolution over given population. Encrypted and reference blocks are used
-	for calculating fitness function.
-
-	New population is stored to new_population. 
-*/
+//
+//	Performs one cycle of evolution over given population. Encrypted and reference blocks are used
+//	for calculating fitness function.
+//
+//	New population is stored to new_population. 
+//
 void evolution(TPassword* population, TPassword* new_population, TBlock& encrypted, const TBlock& reference, const std::function<double(TPassword&)> fitness_function) {
 	int i = 0;
 	int rand1, rand2, rand3, rand4;
@@ -655,7 +613,7 @@ void evolution(TPassword* population, TPassword* new_population, TBlock& encrypt
 
 	// find best individual in current population
 	// possible optimization here
-	find_best_individual(population, fitness_function, &best_index, &best_fitness);
+	find_best_individual(population, fitness_custom_bit_diff, &best_index, &best_fitness);
 
 	if (PRINT_BEST) {
 		print_key((population[best_index]), best_fitness);
@@ -676,8 +634,6 @@ void evolution(TPassword* population, TPassword* new_population, TBlock& encrypt
 		
 		mutation_best_2(noise_vector, population[best_index], *randomly_picked_1, *randomly_picked_2, *randomly_picked_3, *randomly_picked_4);
 
-
-
 		// cross
 		//	1. y = cross noise_vector (v) with active individual (x_i) (by CR parameter)
 		binomic_cross(crossed_vector, *active_individual, noise_vector);
@@ -685,8 +641,8 @@ void evolution(TPassword* population, TPassword* new_population, TBlock& encrypt
 		// choose new guy to population
 		// evaluate fitness(y)
 		// if (fitness(y) > fitness(active_individual)) -> y || active_individual
-		new_score = fitness_function(crossed_vector);
-		active_score = fitness_function(*active_individual);
+		new_score = fitness_custom_bit_diff(crossed_vector);
+		active_score = fitness_custom_bit_diff(*active_individual);
 		if (new_score > active_score) {
 			// use crossed_vector for new population
 			copy_individual(new_population[i], crossed_vector);
@@ -715,6 +671,9 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 	//std::function<double(TPassword&)> fitness_lambda = [](TPassword& psw) {return fitness_custom_linear(psw, *reference_password); };
 	std::function<double(TPassword&)> fitness_lambda = [](TPassword& psw) {return fitness_custom_bit_diff(psw); };
 	//std::function<double(TPassword&)> fitness_lambda = [&encrypted, &reference](TPassword& psw) {return fitness(psw, encrypted, reference); };
+	encrypted_block = &encrypted;
+	reference_block = &reference;
+
 
 	// pointer to evolution function
 	void(*evolution_function)(TPassword*, TPassword*, TBlock&, const TBlock&, const std::function<double(TPassword&)>);
