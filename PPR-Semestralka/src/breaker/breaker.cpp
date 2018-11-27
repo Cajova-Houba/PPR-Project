@@ -18,6 +18,9 @@
 // intel TBB
 #include <tbb/tbb.h>
 
+// opencl
+#include <CL/cl.hpp>
+
 // Declaration of functions used by ApplyEvolutionStep.
 void pick_four_random(int* r1, int* r2, int* r3, int* r4);
 void process_individual(TPassword& res, TPassword& individual, const TPassword& v1, const TPassword& v2, const TPassword& v3, const TPassword& v4, const TPassword& vb);
@@ -72,11 +75,13 @@ private:
 //
 // program control
 const bool USE_PARALLEL = true;
+const bool USE_OPENCL = true;
 const bool PRINT_KEY = false;
 const bool PRINT_BEST = false;
 
 // passwords of various length for testing
 // hex form of full password: 0x68 0x65 0x6C 0x6C 0x6F 0x31 0x32 0x34 0x35
+// todo: remove before submit
 const TPassword reference_password_1{ 'h', 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 const TPassword reference_password_2{ 'h', 'e', 0, 0, 0, 0, 0, 0, 0, 0 };
 const TPassword reference_password_3{ 'h', 'e', 'l', 0, 0, 0, 0, 0, 0, 0 };
@@ -120,7 +125,8 @@ const double CR = 0.5;
 const int D = 10;
 
 // population size, recommended: 10*D - 100*D
-const int NP = 420 * D;
+//const int NP = 420 * D;
+const int NP = 5;
 
 // max number of generations
 const double GENERATIONS = 800;
@@ -150,6 +156,7 @@ const TBlock* reference_block;
 //===============================================
 // PRINT FUNCTIONS
 //===============================================
+// todo: remove before submit
 
 // Prints one TBlock in hex.
 void print_block(const TBlock& block) {
@@ -177,10 +184,11 @@ void print_key(const TPassword& key, const double score) {
 //===============================================
 
 #pragma region fitness_functions
+// todo: remove unneccessary fitness functions before submit.
 //
 // # of different bits.
 //
-double fitness_diff(TPassword& individual) {
+double fitness_bit_diff(TPassword& individual) {
 	double fit = 0;
 	int i = 0;
 	TBlock decrypted;
@@ -197,78 +205,6 @@ double fitness_diff(TPassword& individual) {
 		fit += bs.count();
 	}
 
-
-	return fit;
-}
-/*
-	This fitness function uses gaussian curve with the top being the best individual.
-
-	the function has following format:
-	fit = a * e^( 
-		-(v1-u1)^2 / (2*s^2) 
-		-(v2-u2)^2 / (2*s^2)
-		-(v3-u3)^2 / (2*s^2)
-		...
-	)
-	Where a and s are standard parameters of gaussian function, v1..vn are components of individual which
-	is being tested and u1..un are components of reference block.
-*/
-double fitness_gauss(TPassword& individual, TBlock& encrypted, const TBlock& reference) {
-	double fit = 0;
-	int i = 0;
-	TBlock decrypted;
-	SJ_context context;
-
-	makeKey(&context, individual, sizeof(TPassword));
-	decrypt_block(&context, decrypted, encrypted);
-
-	for (i = 0; i < 8; i++)
-	{
-		fit += -std::pow(decrypted[i] - reference[i], 2) / (2 * G_S*G_S);
-	}
-
-	return G_A * std::exp(fit);
-}
-
-/*
-	Bit difference of individual from reference password. The lower the number, the bigger the difference.
-*/
-double fitness_custom_bit_diff(TPassword& individual) {
-	return fitness_diff(individual);
-	/*double fit = 0;
-	int i = 0;
-	byte xorRes;
-	std::bitset<8> bs;
-
-	for (i = 0; i < D; i++) {
-		xorRes = individual[i] ^ (*reference_password)[i];
-		bs = (xorRes);
-		fit += bs.count();
-	}
-
-
-	return MAX_BIT_DIFF - fit;*/
-}
-
-/*
-	Decrypt encrypted block using individual as key and compare it with encrypted.
-	If it's close to reference, small value is returned, otherwise big value
-	is returned.
-*/
-double fitness(TPassword& individual, TBlock& encrypted, const TBlock &reference) {
-	double fit = 0;
-	int i = 0;
-	TBlock decrypted;
-	SJ_context context;
-
-	makeKey(&context, individual, sizeof(TPassword));
-	decrypt_block(&context, decrypted, encrypted);
-
-	for (i = 0; i < BLOCK_SIZE; i++) {
-		fit += (reference[i] - decrypted[i])*(reference[i] - decrypted[i]);
-	}
-
-	fit = std::sqrt(fit);
 
 	return fit;
 }
@@ -306,175 +242,32 @@ void create_first_population(TPassword *population) {
 void mutation_best_2(TPassword& res, const TPassword& best, const TPassword& vec1, const TPassword& vec2, const TPassword& vec3, const TPassword& vec4) {
 	int i = 0;
 
-	// following loop is replaced with vector library
 	 for (i = 0; i < D; i++) {
-		 float tmp = (best[i] + F * (vec1[i] + vec2[i] - vec3[i] - vec4[i]));
-		 int r = (int)tmp;
-		 res[i] = (byte)r;
+		 res[i] = (byte)(best[i] + F * (vec1[i] + vec2[i] - vec3[i] - vec4[i]));
 	 }
 }
 
 //
-//	Provede mutaci best-2.
-//	diff_vec = (vec1 + vec2 - vec3 - vec4) * F
-//	noise_vec = diff_vec + best
+//	Binomic cross of two individuals. For each element, random number is generated. 
+//	If its <= CR, then noise_vector element, otherwise active_individual element is used.
 //
-//	Kde vec1 ... vec2 jsou nahodne vybrane, nestejne prvky z populace a best je nejlepsi jedinec ze soucaasne populace.
-//
-void mutation_best_2_my_vec(TPassword& res, const TPassword& best, const TPassword& vec1, const TPassword& vec2,  const TPassword& vec3, const TPassword& vec4) {
-	//__m128i vb{}, v1{}, v2{}, v3{}, v4{};
-	//__m128i res_vec{};
-	//__m128 tmp1{}, tmp2{}, tmp3;
-
-	////// help vector with F constant for multiplying
-	//float f_vec[]{ F,F,F,F };
-	//__m128 f_vector = _mm_loadu_ps(f_vec);
-
-	//// load stuff
-	//vb = _mm_loadu_si128((const __m128i*)best);
-	//v1 = _mm_loadu_si128((const __m128i*)vec1);
-	//v2 = _mm_loadu_si128((const __m128i*)vec2);
-	//v3 = _mm_loadu_si128((const __m128i*)vec3);
-	//v4 = _mm_loadu_si128((const __m128i*)vec4);
-
-	//res_vec = _mm_adds_epi8(v1, v2);
-	//res_vec = _mm_subs_epi8(res_vec, v3);
-	//res_vec = _mm_subs_epi8(res_vec, v4);
-
-	//tmp1 = _mm_loadu()
-
-	size_t i = 0;
-
-	// tmp arrays for working with bytes as floats
-	__int32 v1f[12] {};
-	__int32 v2f[12] {};
-	__int32 v3f[12] {};
-	__int32 v4f[12] {};
-	float vbf[12] {};
-
-	// __m128 is 128 bit length vector which can take 4 32-bit floats
-	// lower 4, mid 4 and high 4
-	__m128i res_v1{}, res_v2{}, res_v3{},
-		v1_1{}, v1_2{}, v1_3{},
-		v2_1{}, v2_2{}, v2_3{},
-		v3_1{}, v3_2{}, v3_3{},
-		v4_1{}, v4_2{}, v4_3{};
-
-	__m128 tmp_1{}, tmp_2{}, tmp_3{},
-		vb_1{}, vb_2{}, vb_3{};
-
-	// help vector with F constant for multiplying
-	float f_vec[]{ F,F,F,F };
-	__m128 f_vector = _mm_loadu_ps(f_vec);
-
-	// first, convert from unsigned char to float
-	for (i = 0; i < D; i++)
-	{
-		v1f[i] = (__int32)vec1[i];
-		v2f[i] = (__int32)vec2[i];
-		v3f[i] = (__int32)vec3[i];
-		v4f[i] = (__int32)vec4[i];
-		vbf[i] = (float)best[i];
-	}
-
-	// now load it to vectors
-	v1_1 = _mm_loadu_si128((const __m128i*)v1f);
-	v1_2 = _mm_loadu_si128((const __m128i*)(v1f + 4));
-	v1_3 = _mm_loadu_si128((const __m128i*)(v1f + 8));
-	v2_1 = _mm_loadu_si128((const __m128i*)v2f);
-	v2_2 = _mm_loadu_si128((const __m128i*)(v2f + 4));
-	v2_3 = _mm_loadu_si128((const __m128i*)(v2f + 8));
-	v3_1 = _mm_loadu_si128((const __m128i*)v3f);
-	v3_2 = _mm_loadu_si128((const __m128i*)(v3f + 4));
-	v3_3 = _mm_loadu_si128((const __m128i*)(v3f + 8));
-	v4_1 = _mm_loadu_si128((const __m128i*)v4f);
-	v4_2 = _mm_loadu_si128((const __m128i*)(v4f + 4));
-	v4_3 = _mm_loadu_si128((const __m128i*)(v4f + 8));
-	vb_1 = _mm_loadu_ps(vbf);
-	vb_2 = _mm_loadu_ps(vbf + 4);
-	vb_3 = _mm_loadu_ps(vbf + 8);
-
-	// res = v1 + v2
-	res_v1 = _mm_add_epi32(v1_1, v2_1);
-	res_v2 = _mm_add_epi32(v1_2, v2_2);
-	res_v3 = _mm_add_epi32(v1_3, v2_3);
-
-	// res = res - v3 - v4
-	res_v1 = _mm_sub_epi32(res_v1, v3_1);
-	res_v2 = _mm_sub_epi32(res_v2, v3_2);
-	res_v3 = _mm_sub_epi32(res_v3, v3_3);
-	res_v1 = _mm_sub_epi32(res_v1, v4_1);
-	res_v2 = _mm_sub_epi32(res_v2, v4_2);
-	res_v3 = _mm_sub_epi32(res_v3, v4_3);
-
-	// tmp = res*F
-	tmp_1 = _mm_mul_ps(f_vector, _mm_cvtepi32_ps(res_v1));
-	tmp_2 = _mm_mul_ps(f_vector, _mm_cvtepi32_ps(res_v2));
-	tmp_3 = _mm_mul_ps(f_vector, _mm_cvtepi32_ps(res_v3));
-
-	// res = best + tmp
-	tmp_1 = _mm_add_ps(vb_1, tmp_1);
-	tmp_2 = _mm_add_ps(vb_2, tmp_2);
-	tmp_3 = _mm_add_ps(vb_3, tmp_3);
-
-	// __m128i is 128 bit length vector which can take 4 32-bit integers
-	// lower 4, mid 4 and high 4
-	//__m128i res_v, v1, v2, v3, v4, vb;
-
-	//// __m128 for storing tmp floats
-	//__m128 tmp_res;
-
-	//// load vectors
-	//// _mm_loadu_si128 doesn't require source memory to be aligned
-	//v1 = _mm_loadu_si128((const __m128i*)vec1);
-	//v2 = _mm_loadu_si128((const __m128i*)vec2);
-	//v3 = _mm_loadu_si128((const __m128i*)vec3);
-	//v4 = _mm_loadu_si128((const __m128i*)vec4);
-	//vb = _mm_loadu_si128((const __m128i*)best);
-
-	//// tmp res = v1 + v2 - (v3 - v4)
-	//v1 = _mm_add_epi8(v1, v2);
-	//v1 = _mm_sub_epi8(v1, v3);
-	//res_v = _mm_sub_epi8(v1, v4);
-	//tmp_res = _mm_cvtepi32_ps(_mm_sub_epi8(v1, v3));
-
-
-	//// tmp_res = F * tmp_res
-	////tmp_res = _mm_mul_ps(F, tmp_res);
-	//res_v = _mm_add_epi8(res_v, vb);
-	for (size_t i = 0; i < D; i++)
-	{
-		//res[i] = res_v.m128i_u8[i];
-	}
-	res[0] = (byte)tmp_1.m128_f32[0];
-	res[1] = (byte)tmp_1.m128_f32[1];
-	res[2] = (byte)tmp_1.m128_f32[2];
-	res[3] = (byte)tmp_1.m128_f32[3];
-	res[4] = (byte)tmp_2.m128_f32[0];
-	res[5] = (byte)tmp_2.m128_f32[1];
-	res[6] = (byte)tmp_2.m128_f32[2];
-	res[7] = (byte)tmp_2.m128_f32[3];
-	res[8] = (byte)tmp_3.m128_f32[0];
-	res[9] = (byte)tmp_3.m128_f32[1];
-}
-
-
 void binomic_cross(TPassword& res, const TPassword& active_individual, const TPassword& noise_vector) {
 	double random_val = 0;
 	int i = 0;
 	for (i = 0; i < D; i++) {
 		random_val = cross_distribution(generator);
 		if (random_val <= CR) {
-			// use noise
 			res[i] = noise_vector[i];
 		}
 		else {
-			// use active individual
 			res[i] = active_individual[i];
 		}
 	}
 }
 
+//
+//	Copies elements from src to dest.
+//
 void copy_individual(TPassword& dest, const TPassword& src) {
 	int i = 0;
 		std::copy(src, src + D, dest);
@@ -483,7 +276,7 @@ void copy_individual(TPassword& dest, const TPassword& src) {
 //
 //	Compares two individuals and returns true if they're same.
 //
-bool compare_individuals(TPassword& ind1, TPassword& ind2) {
+bool compare_individuals(const TPassword& ind1, const TPassword& ind2) {
 	int i = 0;
 	bool same = true;
 	
@@ -554,23 +347,64 @@ void process_individual(TPassword& res, TPassword& individual, const TPassword& 
 		new_score = 0;
 
 	// fitness of the current individual
-	individual_score = fitness_custom_bit_diff(individual);
+	individual_score = fitness_bit_diff(individual);
 
 	// evolution = mutation + cross
-	/*mutation_best_2_my_vec(noise_vec, vb,
-		v1, v2, v3, v4);*/
 	mutation_best_2(noise_vec, vb,
 		v1, v2, v3, v4);
 	binomic_cross(res_vec, individual, noise_vec);
 
 	// use better one
-	new_score = fitness_custom_bit_diff(res_vec);
+	new_score = fitness_bit_diff(res_vec);
 	if (new_score > individual_score) {
 		copy_individual(res, res_vec);
 	}
 	else {
 		copy_individual(res, individual);
 	}
+}
+
+//
+// Performs evolution over population while using opencl
+//
+void evolution_opencl(TPassword* population, TPassword* new_population) {
+	TPassword res[NP]{};
+	TPassword v1[NP]{};
+	TPassword v2[NP]{};
+	TPassword v3[NP]{};
+	TPassword v4[NP]{};
+	double crs[NP]{};
+	TPassword* best;
+	cl_int err;
+
+	// fill source arrays
+
+	// prepare it for cl
+	cl::Context ctx;
+	cl::Program prg;
+	cl::Buffer res_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, NP * sizeof(TPassword), res, &err);
+	cl::Buffer pop_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, NP * sizeof(TPassword), population, &err);
+	cl::Buffer v1_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, NP * sizeof(TPassword), v1, &err);
+	cl::Buffer v2_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, NP * sizeof(TPassword), v2, &err);
+	cl::Buffer v3_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, NP * sizeof(TPassword), v3, &err);
+	cl::Buffer v4_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, NP * sizeof(TPassword), v4, &err);
+	cl::Buffer best_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(TPassword), best, &err);
+	cl::Buffer cr_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(double*), (void *)&CR, &err);
+	cl::Buffer f_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(double*), (void *)&F, &err);
+	cl::Buffer crs_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, NP * sizeof(double), crs, &err);
+
+	// create kernel
+	cl::Kernel kernel(prg, "mutation_and_cross", &err);
+	kernel.setArg(0, best_buff);
+	kernel.setArg(1, v1_buff);
+	kernel.setArg(2, v2_buff);
+	kernel.setArg(3, v3_buff);
+	kernel.setArg(4, v4_buff);
+	kernel.setArg(5, pop_buff);
+	kernel.setArg(6, crs_buff);
+	kernel.setArg(7, f_buff);
+	kernel.setArg(8, cr_buff);
+	kernel.setArg(9, res_buff);
 }
 
 //
@@ -613,7 +447,7 @@ void evolution(TPassword* population, TPassword* new_population, TBlock& encrypt
 
 	// find best individual in current population
 	// possible optimization here
-	find_best_individual(population, fitness_custom_bit_diff, &best_index, &best_fitness);
+	find_best_individual(population, fitness_bit_diff, &best_index, &best_fitness);
 
 	if (PRINT_BEST) {
 		print_key((population[best_index]), best_fitness);
@@ -641,8 +475,8 @@ void evolution(TPassword* population, TPassword* new_population, TBlock& encrypt
 		// choose new guy to population
 		// evaluate fitness(y)
 		// if (fitness(y) > fitness(active_individual)) -> y || active_individual
-		new_score = fitness_custom_bit_diff(crossed_vector);
-		active_score = fitness_custom_bit_diff(*active_individual);
+		new_score = fitness_bit_diff(crossed_vector);
+		active_score = fitness_bit_diff(*active_individual);
 		if (new_score > active_score) {
 			// use crossed_vector for new population
 			copy_individual(new_population[i], crossed_vector);
@@ -669,7 +503,7 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 	TPassword new_population[NP] {0};
 	TPassword *current_population_array;
 	//std::function<double(TPassword&)> fitness_lambda = [](TPassword& psw) {return fitness_custom_linear(psw, *reference_password); };
-	std::function<double(TPassword&)> fitness_lambda = [](TPassword& psw) {return fitness_custom_bit_diff(psw); };
+	std::function<double(TPassword&)> fitness_lambda = [](TPassword& psw) {return fitness_bit_diff(psw); };
 	//std::function<double(TPassword&)> fitness_lambda = [&encrypted, &reference](TPassword& psw) {return fitness(psw, encrypted, reference); };
 	encrypted_block = &encrypted;
 	reference_block = &reference;

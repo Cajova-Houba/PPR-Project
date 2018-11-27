@@ -1,0 +1,39 @@
+\documentclass[11pt,a4paper]{scrartcl}
+\usepackage[czech]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{float}
+
+\begin{document}
+	\title{Semestrální práce z předmětu KIV/PPR}
+	\subtitle{Prolomení šifry SkipJack}
+	\author{Zdeněk Valeš}
+	\date{22.11. 2018}
+	\maketitle
+	\newpage
+	
+	\section{Zadání}
+	Vaším úkolem bude prolomit šifru SkipJack. Tuto šifru je výpočetně náročné prolomit hrubou silou, nicméně lze zkusit i sofistikovanější metody např. genetické a evoluční algoritmy. Abyste prolomení urychlili, lze referenční kód přepsat a vektorizovat na úrovni instrukcí, pomocí GPU, případně ho distribuovat pomocí MPI.
+	
+	Samostatná práce využije alespoň dvě z celkem tří možných technologií:
+	
+	\begin{itemize}
+		\item Paralelní program pro systém se sdílenou pamětí - C++, popř. WinAPI
+		\item Program využívající asymetrický multiprocesor - konkrétně x86 CPU a OpenCL kompatibilní GPGPU - C++ AMP
+		\item Paralelní program pro systém s distribuovanou pamětí - C++ MPI
+	\end{itemize}
+	
+	\section{Popis řešení}
+	Cenová fce, jak to přibližně funguje
+	
+	\subsection{Diferenciální evoluce}
+	Jak to cca funguje, který typ mutace jsem použil, hodnoty parametrů
+	
+	\subsection{Paralelizace}
+	Vektory na mutaci ne-e. Použito TBB + OpenCL, popis paralelizace evoluce (parallel\_for)
+	
+	\section{Výsledky}
+	
+	\section{Závěr}
+	
+\end{document}
