@@ -119,7 +119,7 @@ const double GENERATIONS = 800;
 const bool USE_PARALLEL = true;
 const bool USE_OPENCL = true;
 const bool PRINT_KEY = false;
-const bool PRINT_BEST = true;
+const bool PRINT_BEST = false;
 
 // kernel for mutation and binomic cross
 const std::string KERNEL_SOURCE =
