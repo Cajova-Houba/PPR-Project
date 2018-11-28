@@ -16,11 +16,14 @@
 #include <emmintrin.h>
 
 // intel TBB
-#include <tbb/tbb.h>
+//#include <tbb/tbb.h>
 
 // opencl
 #include <CL/cl.hpp>
 
+//===============================================
+// STRUCTURES AND CLASSES
+//===============================================
 // Declaration of functions used by ApplyEvolutionStep.
 void pick_four_random(int* r1, int* r2, int* r3, int* r4);
 void process_individual(TPassword& res, TPassword& individual, const TPassword& v1, const TPassword& v2, const TPassword& v3, const TPassword& v4, const TPassword& vb);
@@ -35,7 +38,7 @@ public:
 		population(population), new_population(new_population), best_vector(best_vector)
 	{}
 
-	void operator() (const tbb::blocked_range<size_t>& r) const {
+	/*void operator() (const tbb::blocked_range<size_t>& r) const {
 		int rand1, rand2, rand3, rand4;
 		TPassword* randomly_picked_1;
 		TPassword* randomly_picked_2;
@@ -59,7 +62,7 @@ public:
 				*randomly_picked_4,
 				best_vector);
 		}
-	}
+	}*/
 
 private:
 	TPassword *const population;
@@ -68,43 +71,16 @@ private:
 };
 
 
-
-//===============================================
-// PROGRAM CONSTANTS
-//===============================================
 //
-// program control
-const bool USE_PARALLEL = true;
-const bool USE_OPENCL = true;
-const bool PRINT_KEY = false;
-const bool PRINT_BEST = false;
-
-// passwords of various length for testing
-// hex form of full password: 0x68 0x65 0x6C 0x6C 0x6F 0x31 0x32 0x34 0x35
-// todo: remove before submit
-const TPassword reference_password_1{ 'h', 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-const TPassword reference_password_2{ 'h', 'e', 0, 0, 0, 0, 0, 0, 0, 0 };
-const TPassword reference_password_3{ 'h', 'e', 'l', 0, 0, 0, 0, 0, 0, 0 };
-const TPassword reference_password_4{ 'h', 'e', 'l', 'l', 0, 0, 0, 0, 0, 0 };
-const TPassword reference_password_5{ 'h', 'e', 'l', 'l', 'o', 0, 0, 0, 0, 0 };
-const TPassword reference_password_6{ 'h', 'e', 'l', 'l', 'o', '1', 0, 0, 0, 0 };
-const TPassword reference_password_7{ 'h', 'e', 'l', 'l', 'o', '1', '2', 0, 0, 0 };
-const TPassword reference_password_8{ 'h', 'e', 'l', 'l', 'o', '1', '2', '3', 0, 0 };
-const TPassword reference_password_9{ 'h', 'e', 'l', 'l', 'o', '1', '2', '3', '4', 0 };
-const TPassword reference_password_10{ 'h', 'e', 'l', 'l', 'o', '1', '2', '3', '4', '5' };
-const TPassword* reference_password = &reference_password_10;
-
-// custom fitness function constants
-const double MAX_BIT_DIFF = 10 * 8;
-
-// length of TBlock
-const int BLOCK_SIZE = 8;
-
-// parametry gaussovske cenove funkce
-// G_A je max výška kopce
-// G_S je šíøka kopce
-const int G_A = 500;
-const int G_S = 15;
+// Structure for passing cl data which don't need to be 
+// re-initialized every generation.
+//
+struct CL_DATA {
+	cl::Platform platform;
+	std::vector<cl::Device> devices;
+	cl::Context* context = nullptr;
+	cl::Program* program = nullptr;
+};
 //===============================================
 
 
@@ -125,11 +101,68 @@ const double CR = 0.5;
 const int D = 10;
 
 // population size, recommended: 10*D - 100*D
-//const int NP = 420 * D;
-const int NP = 5;
+// shoud be divisible by 64 if opencl is used.
+const int NP = 416 * D;
+//const int NP = 7;
 
 // max number of generations
 const double GENERATIONS = 800;
+//===============================================
+
+
+
+//===============================================
+// PROGRAM CONSTANTS
+//===============================================
+//
+// program control
+const bool USE_PARALLEL = true;
+const bool USE_OPENCL = true;
+const bool PRINT_KEY = false;
+const bool PRINT_BEST = true;
+
+// kernel for mutation and binomic cross
+const std::string KERNEL_SOURCE =
+"__kernel void mutation_and_cross("
+"	__global const unsigned char *best,"
+"	__global const unsigned char *v1,"
+"	__global const unsigned char *v2,"
+"	__global const unsigned char *v3,"
+"	__global const unsigned char *v4,"
+"	__global const unsigned char *individual,"
+"	__global const double *cross_rand,"
+"	__global const double *f,"
+"	__global const double *cr,"
+"	__global unsigned char *res) {"
+""
+"	unsigned char noise_vec_elem = 0;"
+// get the index of the current element to be processed
+"	const int i = get_global_id(0);"
+// mutation
+"		noise_vec_elem = best[i % 10] + (*f)*(v1[i] + v2[i] - v3[i] - v4[i]);"
+""
+// binomic cross"
+"		if (cross_rand[i] <= (*cr)) {"
+"			res[i] = noise_vec_elem;"
+"		}"
+"		else {"
+"			res[i] = individual[i];"
+"		}"
+"}";
+
+// Length of TBlock.
+const int BLOCK_SIZE = 8;
+
+// Max bit difference of reference block and decrypted block.
+// Used in fitness function.
+const double MAX_BLOCK_BIT_DIFF = BLOCK_SIZE * 8;
+
+
+// parametry gaussovske cenove funkce
+// G_A je max výška kopce
+// G_S je šíøka kopce
+const int G_A = 500;
+const int G_S = 15;
 //===============================================
 
 
@@ -183,18 +216,17 @@ void print_key(const TPassword& key, const double score) {
 // EVOLUTION FUNCTIONS
 //===============================================
 
-#pragma region fitness_functions
-// todo: remove unneccessary fitness functions before submit.
 //
-// # of different bits.
+//	Returns MAX_BLOCK_BIT_DIFF - # of different bits between reference 
+//	block and decrypted block.
 //
-double fitness_bit_diff(TPassword& individual) {
+double fitness_bit_diff(unsigned char* individual) {
 	double fit = 0;
 	int i = 0;
 	TBlock decrypted;
 	SJ_context context;
 	byte xorRes;
-	std::bitset<8> bs;
+	std::bitset<BLOCK_SIZE> bs;
 
 	makeKey(&context, individual, sizeof(TPassword));
 	decrypt_block(&context, decrypted, *encrypted_block);
@@ -206,12 +238,11 @@ double fitness_bit_diff(TPassword& individual) {
 	}
 
 
-	return fit;
+	return MAX_BLOCK_BIT_DIFF - fit;
 }
-#pragma endregion
 
 
-#pragma region evolution_helpers
+#pragma region evolution
 //
 //	Randomly gnerates one guy in population.
 //
@@ -223,6 +254,7 @@ void generate_individual(TPassword& guy) {
 		guy[i] = (byte)param_value_distribution(generator);
 	}
 }
+
 
 //
 //	Generate first population of DE algorithm.
@@ -236,6 +268,7 @@ void create_first_population(TPassword *population) {
 	}
 }
 
+
 //
 //	Same as mutation_best_2_vec but doesn't use vectors internaly.
 //
@@ -246,6 +279,7 @@ void mutation_best_2(TPassword& res, const TPassword& best, const TPassword& vec
 		 res[i] = (byte)(best[i] + F * (vec1[i] + vec2[i] - vec3[i] - vec4[i]));
 	 }
 }
+
 
 //
 //	Binomic cross of two individuals. For each element, random number is generated. 
@@ -265,13 +299,15 @@ void binomic_cross(TPassword& res, const TPassword& active_individual, const TPa
 	}
 }
 
+
 //
 //	Copies elements from src to dest.
 //
-void copy_individual(TPassword& dest, const TPassword& src) {
+void copy_individual(TPassword& dest, const unsigned char* src) {
 	int i = 0;
 		std::copy(src, src + D, dest);
 }
+
 
 //
 //	Compares two individuals and returns true if they're same.
@@ -288,10 +324,11 @@ bool compare_individuals(const TPassword& ind1, const TPassword& ind2) {
 	return same;
 }
 
+
 //
 //	Finds the best individual in the population and returns its index and score.
 //
-void find_best_individual(TPassword* population, const std::function<double(TPassword&)> fitness_function, int* best_index, double* best_score) {
+void find_best_individual(TPassword* population, int* best_index, double* best_score) {
 	int i = 0;
 	double fitness = 0;
 	double b_s = 0;
@@ -299,7 +336,7 @@ void find_best_individual(TPassword* population, const std::function<double(TPas
 
 	for (i = 0; i < NP; i++)
 	{
-		fitness = fitness_function(population[i]);
+		fitness = fitness_bit_diff(population[i]);
 		if (b_i == -1 || fitness > b_s) {
 			b_i = i;
 			b_s = fitness;
@@ -309,6 +346,7 @@ void find_best_individual(TPassword* population, const std::function<double(TPas
 	*best_index = b_i;
 	*best_score = b_s;
 }
+
 
 //
 //	Picks 4 different indexes in population.
@@ -328,17 +366,16 @@ void pick_four_random(int* r1, int* r2, int* r3, int* r4) {
 	while (rand3 == rand4) {
 		rand4 = population_picker_distribution(generator);
 	}
-
+	
 	*r1 = rand1;
 	*r2 = rand2;
 	*r3 = rand3;
 	*r4 = rand4;
 }
-#pragma endregion
 
 
 //
-// Performs evolution of one individual. Result (either old individual or new individual) is copied to res.
+//	Performs evolution of one individual. Result (either old individual or new individual) is copied to res.
 //
 void process_individual(TPassword& res, TPassword& individual, const TPassword& v1, const TPassword& v2, const TPassword& v3, const TPassword& v4, const TPassword& vb) {
 	TPassword noise_vec{};
@@ -364,37 +401,92 @@ void process_individual(TPassword& res, TPassword& individual, const TPassword& 
 	}
 }
 
+
 //
-// Performs evolution over population while using opencl
+//	Performs evolution over population while using opencl.
+//	Returns CL_SUCCESS if everything is OK, otherwise returns error num.
 //
-void evolution_opencl(TPassword* population, TPassword* new_population) {
-	TPassword res[NP]{};
-	TPassword v1[NP]{};
-	TPassword v2[NP]{};
-	TPassword v3[NP]{};
-	TPassword v4[NP]{};
-	double crs[NP]{};
-	TPassword* best;
+signed __int32 evolution_opencl(TPassword* population, TPassword* new_population, CL_DATA cl_data) {
+	size_t i = 0, j = 0;
+
+	// arrays for opencl buffers
+	// all input data are converted to 1D arrays of unsigned char
+	const size_t ARRAY_LEN = NP*D;
+	const size_t BUFFER_LEN = ARRAY_LEN * sizeof(unsigned char);
+	unsigned char res[ARRAY_LEN]{};
+	unsigned char v1[ARRAY_LEN]{};
+	unsigned char v2[ARRAY_LEN]{};
+	unsigned char v3[ARRAY_LEN]{};
+	unsigned char v4[ARRAY_LEN]{};
+	double crs[ARRAY_LEN]{};
+	//unsigned char best[ARRAY_LEN]{};
 	cl_int err;
+	TPassword tmp;
+
+	// best and random indexes
+	double best_fitness = 0;
+	int best_index = 0;
+	int rand1, rand2, rand3, rand4;
+
+	size_t global_item_size = NP;
+	size_t local_item_size = 32;
+
+	// score for comparing results
+	double curr_score = 0, new_score = 0;
 
 	// fill source arrays
+	find_best_individual(population, &best_index, &best_fitness);
+	if (PRINT_BEST) {
+		print_key(population[best_index], best_fitness);
+	}
+	for (i = 0; i < NP; i++)
+	{
+		pick_four_random(&rand1, &rand2, &rand3, &rand4);
+		for (j = 0; j < D; j++)
+		{
+			crs[i*D + j] = cross_distribution(generator);
+			v1[i * 10 + j] = population[rand1][j];
+			v2[i * 10 + j] = population[rand2][j];
+			v3[i * 10 + j] = population[rand3][j];
+			v4[i * 10 + j] = population[rand4][j];
+			//best[i * 10 + j] = best[j];
+		}
+	}
 
-	// prepare it for cl
-	cl::Context ctx;
-	cl::Program prg;
-	cl::Buffer res_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, NP * sizeof(TPassword), res, &err);
-	cl::Buffer pop_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, NP * sizeof(TPassword), population, &err);
-	cl::Buffer v1_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, NP * sizeof(TPassword), v1, &err);
-	cl::Buffer v2_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, NP * sizeof(TPassword), v2, &err);
-	cl::Buffer v3_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, NP * sizeof(TPassword), v3, &err);
-	cl::Buffer v4_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, NP * sizeof(TPassword), v4, &err);
-	cl::Buffer best_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(TPassword), best, &err);
-	cl::Buffer cr_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(double*), (void *)&CR, &err);
-	cl::Buffer f_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(double*), (void *)&F, &err);
-	cl::Buffer crs_buff(ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, NP * sizeof(double), crs, &err);
+	// prepare buffers for cl
+	cl::Buffer res_buff(*cl_data.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, BUFFER_LEN, res, &err);
+	if (err != CL_SUCCESS) {
+		std::cout << "Error while creating buffer for res." << std::endl;
+		return err;
+	}
+	cl::Buffer pop_buff(*cl_data.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, BUFFER_LEN, population, &err);
+	cl::Buffer v1_buff(*cl_data.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, BUFFER_LEN, v1, &err);
+	if (err != CL_SUCCESS) {
+		std::cout << "Error while creating buffer for v1." << std::endl;
+		return err;
+	}
+	cl::Buffer v2_buff(*cl_data.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, BUFFER_LEN, v2, &err);
+	if (err != CL_SUCCESS) {
+		std::cout << "Error while creating buffer for v2." << std::endl;
+		return err;
+	}
+	cl::Buffer v3_buff(*cl_data.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, BUFFER_LEN, v3, &err);
+	if (err != CL_SUCCESS) {
+		std::cout << "Error while creating buffer for v3." << std::endl;
+		return err;
+	}
+	cl::Buffer v4_buff(*cl_data.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, BUFFER_LEN, v4, &err);
+	if (err != CL_SUCCESS) {
+		std::cout << "Error while creating buffer for v4." << std::endl;
+		return err;
+	}
+	cl::Buffer best_buff(*cl_data.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(TPassword*), population[best_index], &err);
+	cl::Buffer cr_buff(*cl_data.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(double*), (void *)&CR, &err);
+	cl::Buffer f_buff(*cl_data.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(double*), (void *)&F, &err);
+	cl::Buffer crs_buff(*cl_data.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, ARRAY_LEN * sizeof(double), crs, &err);
 
 	// create kernel
-	cl::Kernel kernel(prg, "mutation_and_cross", &err);
+	cl::Kernel kernel(*cl_data.program, "mutation_and_cross", &err);
 	kernel.setArg(0, best_buff);
 	kernel.setArg(1, v1_buff);
 	kernel.setArg(2, v2_buff);
@@ -405,22 +497,63 @@ void evolution_opencl(TPassword* population, TPassword* new_population) {
 	kernel.setArg(7, f_buff);
 	kernel.setArg(8, cr_buff);
 	kernel.setArg(9, res_buff);
+
+	// execute kernel
+	// this performs mutation and binomic cross over whole population
+	cl::CommandQueue queue(*cl_data.context, cl_data.devices[0], 0, &err);
+	if (err != CL_SUCCESS) {
+		std::cout << "Error while creating queue. " << std::endl;
+		return err;
+	}
+	queue.enqueueNDRangeKernel(kernel,
+		cl::NullRange,
+		cl::NDRange(global_item_size),
+		cl::NDRange(local_item_size));
+	err = queue.finish();
+	if (err != CL_SUCCESS) {
+		std::cout << "Error while running the queue. " << std::endl;
+		return err;
+	}
+
+	// read and process results
+	err = queue.enqueueReadBuffer(res_buff, CL_TRUE, 0, BUFFER_LEN, res);
+	if (err != CL_SUCCESS) {
+		std::cout << "Error while reading results from queue. " << std::endl;
+		return err;
+	}
+	queue.finish();
+	for ( i = 0; i < NP; i++)
+	{
+		// (res[i*10]) is effectively same as TPassword
+		// compare scores and decide what to keep in new population
+		curr_score = fitness_bit_diff(population[i]);
+		new_score = fitness_bit_diff(&(res[i*10]));
+		if (new_score > curr_score) {
+			copy_individual(new_population[i], &(res[i*10]));
+		}
+		else {
+			copy_individual(new_population[i], population[i]);
+		}
+	}
+
+	return CL_SUCCESS;
 }
+
 
 //
 //	Performs evolution over population array while using parallelism.
 //
-void evolution_parallel(TPassword* population, TPassword* new_population, TBlock& encrypted, const TBlock& reference, const std::function<double(TPassword&)> fitness_function) {
-	size_t i = 0;
+void evolution_parallel(TPassword* population, TPassword* new_population) {
 	double best_fitness = 0;
 	int best_index = 0;
 
-	find_best_individual(population, fitness_function, &best_index, &best_fitness);
+	find_best_individual(population, &best_index, &best_fitness);
 
-	tbb::parallel_for(tbb::blocked_range<size_t>(0, NP), 
-		ApplyEvolutionStep(population, new_population, population[best_index])
-	);
+	//tbb::parallel_for(tbb::blocked_range<size_t>(0, NP), 
+	//	ApplyEvolutionStep(population, new_population, population[best_index])
+	//);
 }
+
 
 //
 //	Performs one cycle of evolution over given population. Encrypted and reference blocks are used
@@ -428,7 +561,7 @@ void evolution_parallel(TPassword* population, TPassword* new_population, TBlock
 //
 //	New population is stored to new_population. 
 //
-void evolution(TPassword* population, TPassword* new_population, TBlock& encrypted, const TBlock& reference, const std::function<double(TPassword&)> fitness_function) {
+void evolution(TPassword* population, TPassword* new_population) {
 	int i = 0;
 	int rand1, rand2, rand3, rand4;
 	TPassword* active_individual;
@@ -447,7 +580,7 @@ void evolution(TPassword* population, TPassword* new_population, TBlock& encrypt
 
 	// find best individual in current population
 	// possible optimization here
-	find_best_individual(population, fitness_bit_diff, &best_index, &best_fitness);
+	find_best_individual(population, &best_index, &best_fitness);
 
 	if (PRINT_BEST) {
 		print_key((population[best_index]), best_fitness);
@@ -488,10 +621,84 @@ void evolution(TPassword* population, TPassword* new_population, TBlock& encrypt
 	}
 }
 //===============================================
+#pragma endregion
 
 
 
-// Cipher breaker.
+//===============================================
+// OTHER FUNCTIONS
+//===============================================
+
+//
+//	Initialize OpenCL structure. Tries to load GPU device first 
+//	and if no such device is found, uses first available. Returns CL_SUCCESS if everything
+//	is ok, otherwise retrns error.
+//
+signed __int32 initialize_opencl(CL_DATA* data) {
+	cl_int err;
+
+	// platform and devices
+	err = cl::Platform::get(&(data->platform));
+	if (err != CL_SUCCESS) {
+		std::cout << "Error while getting platform." << std::endl;
+		return err;
+	}
+	err = data->platform.getDevices(CL_DEVICE_TYPE_ALL, &(data->devices));
+	if (err != CL_SUCCESS) {
+		std::cout << "Error while geting devices." << std::endl;
+		return err;
+	}
+	if ((data->devices).empty()) {
+		err = data->platform.getDevices(CL_DEVICE_TYPE_ALL, &(data->devices));
+		if (err != CL_SUCCESS) {
+			std::cout << "Error while geting devices." << std::endl;
+			return err;
+		}
+		if ((data->devices).empty()) {
+			std::cout << "No devices found." << std::endl;
+			return CL_DEVICE_NOT_FOUND;
+		}
+	}
+
+	// context
+	data->context = new cl::Context(data->devices, NULL, NULL, NULL, &err);
+	if (err != CL_SUCCESS) {
+		std::cout << "Error while creating context." << std::endl;
+		return err;
+	}
+
+	// program
+	cl::Program::Sources source(1, std::make_pair(KERNEL_SOURCE.c_str(), KERNEL_SOURCE.length()));
+	data->program = new cl::Program(*(data->context), source, &err);
+	err |= data->program->build(data->devices);
+	if (err != CL_SUCCESS) {
+		std::cout << "Error while creating and building program." << std::endl;
+		return err;
+	}
+
+	return CL_SUCCESS;
+}
+
+
+// 
+// Clean up OpenCL data.
+//
+void clean_opencl(CL_DATA* data) {
+	if (data != nullptr) {
+		if (data->context != nullptr) {
+			delete data->context;
+		}
+
+		if (data->program != nullptr) {
+			delete data->program;
+		}
+	}
+}
+
+
+//
+//	Cipher breaker.
+//
 bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &password) {
 	SJ_context context;
 	TBlock decrypted;
@@ -499,21 +706,34 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 	int i = 0, j=0;
 	int generation = 0;
 	bool done = false;
-	TPassword population[NP] {0};
-	TPassword new_population[NP] {0};
-	TPassword *current_population_array;
+	TPassword population1[NP] {0};
+	TPassword population2[NP] {0};
+	TPassword *pop = population1;
+	TPassword *new_pop = population2;
 	//std::function<double(TPassword&)> fitness_lambda = [](TPassword& psw) {return fitness_custom_linear(psw, *reference_password); };
 	std::function<double(TPassword&)> fitness_lambda = [](TPassword& psw) {return fitness_bit_diff(psw); };
 	//std::function<double(TPassword&)> fitness_lambda = [&encrypted, &reference](TPassword& psw) {return fitness(psw, encrypted, reference); };
 	encrypted_block = &encrypted;
 	reference_block = &reference;
+	CL_DATA cl_data;
+	cl_int res;
 
 
 	// pointer to evolution function
-	void(*evolution_function)(TPassword*, TPassword*, TBlock&, const TBlock&, const std::function<double(TPassword&)>);
+	void(*evolution_function)(TPassword*, TPassword*);
 
 	if (USE_PARALLEL) {
-		evolution_function = evolution_parallel;
+		if (USE_OPENCL) {
+			res = initialize_opencl(&cl_data);
+			if (res != CL_SUCCESS) {
+				std::cout << "Failed to initialize opencl data." << std::to_string(res) << std::endl;
+				clean_opencl(&cl_data);
+				return false;
+			}
+		}
+		else {
+			evolution_function = evolution_parallel;
+		}
 	}
 	else {
 		evolution_function = evolution;
@@ -521,14 +741,8 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 
 
 	//std::cout << "Creating first population " << std::endl;
-	create_first_population(population);
+	create_first_population(pop);
 	//std::cout << "First population created " << std::endl;
-
-	/*for (testing_key[0] = 0; testing_key[0] < 255; testing_key[0]++) {
-		print_key(testing_key, fitness_lambda(testing_key));
-	}
-
-	return false;*/
 
 	// keep evolving till the key is guessed or max number of generations is reached
 	while (generation < GENERATIONS && !done) {
@@ -537,23 +751,26 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 		// generation mod 2 ifs are used to change between population arrays 
 		for (i = 0; i < NP; i++) {
 
+			// keep switching between population arrays
 			if (generation % 2 == 0) {
-				current_population_array = population;
+				pop = population1;
+				new_pop = population2;
 			}
 			else {
-				current_population_array = new_population;
+				pop = population2;
+				new_pop = population1;
 			}
 
 			if (PRINT_KEY) {
-				print_key(current_population_array[i], fitness_lambda(current_population_array[i]));
+				print_key(pop[i], fitness_lambda(pop[i]));
 			}
-			makeKey(&context, current_population_array[i], sizeof(TPassword));
+			makeKey(&context, pop[i], sizeof(TPassword));
 
 			// if the decryption is successfull => bingo
 			decrypt_block(&context, decrypted, encrypted);
 			if (memcmp(decrypted, reference, sizeof(TBlock)) == 0) {
 				memcpy(password, testing_key, sizeof(TPassword));
-				copy_individual(password, current_population_array[i]);
+				copy_individual(password, pop[i]);
 				//print_key(current_population_array[i], fitness_lambda(current_population_array[i]));
 				//std::cout << "Done in " << std::to_string(generation) << "!" << std::endl;
 				std::cout << std::to_string(generation) << ";";
@@ -562,12 +779,19 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 			}
 		}
 
-		// use current array as source of evolution and old array as destination of evolution
-		if (generation % 2 == 0) {
-			evolution_function(population, new_population, encrypted, reference, fitness_lambda);
+		
+		if (USE_PARALLEL && USE_OPENCL) {
+			res = evolution_opencl(pop, new_pop, cl_data);
+			if (res != CL_SUCCESS) {
+				std::cout << "Error encoutered in generation " << std::to_string(generation) << std::endl;
+				break;
+			}
+		}
+		else if (USE_PARALLEL) {
+			evolution_parallel(pop, new_pop);
 		}
 		else {
-			evolution_function(new_population, population, encrypted, reference, fitness_lambda);
+			evolution(pop, new_pop);
 		}
 		
 		//if (generation % 5 == 0) {
@@ -577,5 +801,9 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 		generation++;
 	}
 
+	if (USE_OPENCL) {
+		clean_opencl(&cl_data);
+	}
 	return done;
 }
+//===============================================

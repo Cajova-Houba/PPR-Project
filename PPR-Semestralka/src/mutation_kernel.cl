@@ -23,7 +23,7 @@ __kernel void mutation_and_cross(
 		noise_vec_elem = best[i % 10][k] + (*f)*(v1[i][k] + v2[i][k] - v3[i][k] - v4[i][k]);
 		
 		// binomic cross
-		if ((*cross_rand[i]) <= (*cr)) {
+		if (cross_rand[i][k] <= (*cr)) {
 			res[i][k] = noise_vec_elem;
 		} else {
 			res[i][k] = individual[i][k];
