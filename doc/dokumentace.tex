@@ -28,7 +28,7 @@
 	\section{Popis řešení}
 	Vstupem prolamovací funkce je zašifrovaný blok a referenční blok. Cílem algoritmu je nalezení klíče (jedince) po jehož použití v dešifrovací funkci bude vstupní blok identický s referenčním. Algoritmus je znázorněn na obrázku \ref{fig:alg}.
 	
-	K prolomení šifry jsem použil diferenciální evoluci s Hammingovou vzdáleností jako cenovou funkcí. Části programu jsou paralelizované pomocí kníhoven Intel TBB a OpenCL.
+	K prolomení šifry jsem použil diferenciální evoluci s Hammingovou vzdáleností jako cenovou funkcí. Části programu jsou paralelizované pomocí knihoven Intel TBB a OpenCL.
 	
 	\begin{figure}[!h]
 		\centering
@@ -40,8 +40,37 @@
 	\subsection{Diferenciální evoluce}
 	Diferenciální evoluce je v principu velmi podobná klasickým genetickým algoritmům. Liší se od nich počtem rodičů (\textgreater2) potřebným k tvorbě potomka a pořadím operací mutace, křížení \cite{hlavacek_de}. 
 	
-	Při evoluci jedince se nejprve mutací získá šumový vektor, který se pak zkříží s aktivním jedincem. Pokud má takto vzniklý jedinec lepší skóre než aktivní, použije se do nové populace.
-	Evoluce je řízena dvěma parametry: mutační konstantou \textit{F} a prahem křížení \textit{CR}. Doporučené hodnoty jsou 0,3 -- 0,9 pro \textit{F} a 0,8 -- 0,9 pro \textit{CR} \cite{hlavacek_de}. V mém řešení jsem zvolil hodnoty $F=0,3$ a $CR=0,5$.
+	Při evoluci jedince se nejprve mutací získá šumový vektor, který se pak zkříží s aktivním jedincem (právě zpracovávaný jedinec v generaci). Pokud má takto vzniklý jedinec lepší skóre než aktivní, použije se do nové populace. Evoluce je řízena dvěma parametry: mutační konstantou \textit{F} a prahem křížení \textit{CR}. Doporučené hodnoty jsou 0,3 -- 0,9 pro \textit{F} a 0,8 -- 0,9 pro \textit{CR} \cite{hlavacek_de}. Hodnoty použité v mém řešení jsou uvedeny v tabulce \ref{tab:param-val}.
+	
+	\begin{table}[H]
+		\begin{center}	
+			\begin{tabular}{|c|c|}
+				\hline
+				Parametr & Hodnota \\
+				\hline
+				\hline
+				F & 0,3 \\
+				\hline
+				CR & 0,5 \\
+				\hline 
+				Velikost populace & 4160 \\
+				\hline
+				Maximální počet generací & 800 \\
+				\hline
+			\end{tabular}
+		\end{center}
+		\caption{Hodnoty parametrů evoluce}
+		\label{tab:param-val}
+	\end{table}
+	
+	V algoritmu diferenciální evoluce je možné použít několik mutačních funkcí \cite{hlavacek_de}, na doporučení vyučujícího jsem použil mutační funkci \textit{best/2}. Ta je znázorněna v rovnici \ref{eq:best2}, $v_{best}$ je nejlepší jedinec v současné generaci, $v_1,v_2,v_3,v_4$ jsou náhodně vybraní, nestejní jedinci (pro každého aktivního jedince jsou vybráni znovu) a F je výše zmíněná mutační konstanta. Výsledkem mutace je šumový vektor $noise$. 
+	
+	\begin{equation}
+		noise = v_{best} + F\cdot(v_1+v_2-v_3-v_4)
+		\label{eq:best2}
+	\end{equation}
+	
+		Šumový vektor je následně zkřížen (binomické křížení) s aktivním jedincem a pokud je výsledný vektor lepší než aktivní jedinec, použije se v nové generaci.
 	
 	\subsubsection{Cenová funkce}
 	Jako cenovou funkci jsem použil variantu Hammingovo vzdálenosti dešifrovaného bloku od bloku referečního. Během implementace jsem experimentoval s více cenovými funkcemi a držel jsem se konvence větší skóre znamená lepšího jedince. U Hammingovo vzdálenosti to ale neplatí, proto jsem tuto vzdálenost odečetl od maximální možné vzdálenosti (viz rovnice \ref{eq:fitness}).
@@ -51,7 +80,7 @@
 		\label{eq:fitness}
 	\end{equation}
 	
-	Vzhledem k povaze šifry SkipJack není tato cenová příliš vhodná, jak je vidět na obrázku \ref{fig:fitness-chart}. Během přednášek nám byla vyučujícím doporučena dvojrozměrná cenová funkce, tu se mi bohužel nepodařilo funkčně naimplementovat.
+	Tato cenová funkce nekonverguje, vzhledem k povaze šifry SkipJack, příliš dobře, jak je vidět na obrázku \ref{fig:fitness-chart}. Během přednášek nám byla vyučujícím doporučena dvojrozměrná cenová funkce, tu se mi bohužel nepodařilo funkčně naimplementovat.
 	
 	\begin{figure}[!h]
 		\centering
@@ -60,11 +89,37 @@
 		\label{fig:fitness-chart}
 	\end{figure}
 
-	Kromě Hammingovo vzdálenosti dešifrovaného bloku od referenčního jsem experimentoval i se vzdáleností jedince od referenčního hesla. V tomto případě algoritmus konverguje dobře (100-200 generací), nicméně znalost hesla není běžný případ a proto jsem tuto cenovou funkci použil pouze k odstranění chyb evolučního algoritmu.
+	Kromě Hammingovo vzdálenosti dešifrovaného bloku od referenčního jsem experimentoval i se vzdáleností jedince od referenčního hesla. V tomto případě algoritmus konverguje dobře (100-200 generací), nicméně znalost hesla není běžný případ a proto jsem tuto cenovou funkci použil pouze k odstranění chyb v implementaci evolučního algoritmu.
+	
+	
 	\subsection{Paralelizace}
-	Vektory na mutaci ne-e. Použito TBB + OpenCL, popis paralelizace evoluce (parallel\_for)
+	K paralelizace mého řešení jsem postupně využil tři technologie: vektorové instrukce, knihovnu Intel TBB a knihovnu OpenCL. 
+	
+	\paragraph{Vektorové instrukce} Procesor v mém počítači podporuje vektorové instrukce SSE 2 a nižší. Tyto instrukce využívájí vektor délky 128 bitů. Do tohoto vektoru se vejde 16 bytů, což by při maximální délce hesla 10 bytů bylo dostačující, nicméně mutace \textit{best-2} vyžaduje násobení floatem. Nejmenší float, který lze do vektoru uložit zabírá 32 bitů (do vektoru se tedy vejdou jen 3), aby bylo možné vektorové instrukce v mutační funkci použít, je tedy nutné každý 1 byte hesla roztáhnout na 32 bitů, provést potřebné operace a poté jej z 32 bitů převézt zpátky na 8 bitů. Tato nadbytečná režie způsobila neefektivnost vektorových instrukcí a proto jsem je v mutační funkci nakonec nepoužil.
+
+	\subsubsection{Intel TBB}
+	Intel TBB je knihovna pro jazyk C++ sloužící k paralelizacei programů.
+	
+	NAPSAT LÍP
+	
+	 Knihovnu jsem použil k paralelizaci evoluce. Původně jsem populaci manuálně rozdělil na dávky, které jsem pak zpracovával pomocí \textit{parallel\_for()}. Tento přístup se ukázal jako neefektivní, protože rozdělení dat mezi vlákny zvládá knihovna sama (a lépe). Proto jsem nakonec logiku evoluce jedince přesunul do funktoru, který následně předávám do \textit{parallel\_for()}.
+	
+	\subsubsection{OpenCL}
+	OpenCL slouží mimojiné k paralelizaci výpočtů pomocí CPU, nebo GPU. Výpočet probíhá v tzv. kernelu, což je funkce napsaná v jazyce OpenCL a přeložená pro dané výpočetní zařízení. Parametry funkce jsou typicky ukazatele na pole s daty z nichž kernel vybere jeden 'řádek' nad kterým provede operaci.
+	
+	V mém řešení jsem do kernelu přenesl mutaci a křížení jednoho prvku -- kernel je znázorněný na obrázku \ref{fig:kernel}. V kroku evoluce se tedy nejprve nagenerují potřebná data pro celou populaci (pole s vektory $v1$,$v2$,$v3$,$v4$ a pole $randoms$ s náhodnými čísly pro křížení) , nad nimi proběhne paralelizovaný výpočet evoluce a nakonec jsou z výsledků vybráni jedinci, kteří přežijí do následující generace. 
+	
+	\begin{figure}[H]
+		\centering
+		\includegraphics[width=12cm]{img/opencl-data-diag}
+		\caption{Operace prováděná v kernelu}
+		\label{fig:kernel}
+	\end{figure}
+
+	V mém počítači mám bohužel jen intergrovanou grafickou kartu a tak je rozdíl oproti použití knihovny TBB téměř nepatrný, jak je vidět v části \ref{sec:results}.
 	
 	\section{Výsledky}
+	\label{sec:results}
 	
 	\section{Závěr}
 	
