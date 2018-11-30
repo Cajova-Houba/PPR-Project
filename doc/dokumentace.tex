@@ -55,7 +55,7 @@
 				\hline 
 				Velikost populace & 4160 \\
 				\hline
-				Maximální počet generací & 800 \\
+				Maximální počet generací & 1000 - 2000 \\
 				\hline
 			\end{tabular}
 		\end{center}
@@ -107,7 +107,7 @@
 	\subsubsection{OpenCL}
 	OpenCL slouží mimojiné k paralelizaci výpočtů pomocí CPU, nebo GPU. Výpočet probíhá v tzv. kernelu, což je funkce napsaná v jazyce OpenCL a přeložená pro dané výpočetní zařízení. Parametry funkce jsou typicky ukazatele na pole s daty z nichž kernel vybere jeden 'řádek' nad kterým provede operaci.
 	
-	V mém řešení jsem do kernelu přenesl mutaci a křížení jednoho prvku -- kernel je znázorněný na obrázku \ref{fig:kernel}. V kroku evoluce se tedy nejprve nagenerují potřebná data pro celou populaci (pole s vektory $v1$,$v2$,$v3$,$v4$ a pole $randoms$ s náhodnými čísly pro křížení) , nad nimi proběhne paralelizovaný výpočet evoluce a nakonec jsou z výsledků vybráni jedinci, kteří přežijí do následující generace. 
+	V mém řešení jsem do kernelu přenesl mutaci a křížení jednoho bytu hesla -- kernel je znázorněný na obrázku \ref{fig:kernel}. V kroku evoluce se tedy nejprve nagenerují potřebná data pro celou populaci (pole s vektory $v1$,$v2$,$v3$,$v4$ a pole $randoms$ s náhodnými čísly pro křížení), nad nimi proběhne paralelizovaný výpočet evoluce a nakonec jsou z výsledků vybráni jedinci, kteří přežijí do následující generace. 
 	
 	\begin{figure}[H]
 		\centering
@@ -116,12 +116,105 @@
 		\label{fig:kernel}
 	\end{figure}
 
-	V mém počítači mám bohužel jen intergrovanou grafickou kartu a tak je rozdíl oproti použití knihovny TBB téměř nepatrný, jak je vidět v části \ref{sec:results}.
+	Kvůli nutnosti předpřipravit všechna data před začátkem výpočtu zabírá program při použití OpenCL velké množství paměti -- pole s vektory a náhodnými čísly zabírají téměř 2 MB. V mém počítači mám bohužel jen intergrovanou grafickou kartu ...
 	
 	\section{Výsledky}
 	\label{sec:results}
+	Všechna testování jsem prováděl na svém počítači jehož specifikace jsou uvedeny v tabulce \ref{tab:pc-spec}. Pro různá nastavení populace a způsobu zpracování jsem program nechal proběhnout dvacetkrát. Výsledky získané měřením jsou uvedeny v tabulkách \ref{tab:res-serial}, \ref{tab:res-tbb} a \ref{tab:res-opencl}. Měření bylo prováděno s délkou hesla 10 bytů. Šifru se podařilo prolomit pouze při snížení délky hesla na 1 byte.
+	
+	\begin{table}[H]
+		\begin{center}
+			\begin{tabular}{|c|c|}
+				\hline
+				Parametr & Hodnota \\
+				\hline
+				\hline
+				CPU & Intel Pentium B970, 2 jádra, 2,30 GHz, 2MB L3 Cache\\
+				\hline
+				GPU & integrovaná \\
+				\hline
+				RAM & 8 GB \\
+				\hline
+				OS & Windows 7 Ultimate SP 1 \\
+				\hline
+			\end{tabular}
+		\end{center}
+		\caption{Specifikace počítače}
+		\label{tab:pc-spec}
+	\end{table}
+
+	\begin{table}[H]
+		\begin{center}
+			\begin{tabular}{|c|c|c|}
+				\hline
+				Počet generací & Průměrná doba běhu [s] & Skóre nejlepšího jedince\\
+				\hline
+				\hline
+				1000 & 12,457 & 54 \\
+				\hline
+				1500 & 18,589 & 54 \\
+				\hline
+				2000 & 24,774 & 52 \\
+				\hline
+			\end{tabular}
+		\end{center}
+		\caption{Tabulka s výsledky pro běh bez paralelizace}
+		\label{tab:res-serial}
+	\end{table}
+
+	\begin{table}[H]
+		\begin{center}
+			\begin{tabular}{|c|c|c|}
+				\hline
+				Počet generací & Průměrná doba běhu [s] & Skóre nejlepšího jedince\\
+				\hline
+				\hline
+				1000 & 6,825 & 53 \\
+				\hline
+				1500 & 10,238 & 53 \\
+				\hline
+				2000 & 13,611 & 52 \\
+				\hline
+			\end{tabular}
+		\end{center}
+		\caption{Tabulka s výsledky pro běh s paralelizací knihovnou Intel TBB}
+		\label{tab:res-tbb}
+	\end{table}
+
+	\begin{table}[H]
+		\begin{center}
+			\begin{tabular}{|c|c|c|}
+				\hline
+				Počet generací & Průměrná doba běhu [s] & Skóre nejlepšího jedince\\
+				\hline
+				\hline
+				1000 & 13,111 & 52 \\
+				\hline
+				1500 & 19,5305 & 54 \\
+				\hline
+				2000 & 25,923 & 50 \\
+				\hline
+			\end{tabular}
+		\end{center}
+		\caption{Tabulka s výsledky pro běh s paralelizací knihovnou OpenCL}
+		\label{tab:res-opencl}
+	\end{table}
+
+	Z měření vyplývá, že největšího urychlení bylo dosaženo použitím knihovny Intel TBB. Oproti tomu použití knihovny OpenCL program v podstatě neurychlilo, což může být způsobeno špatnou implementací programu, nebo použitím na nevhnodnou část výpočtu.
+
+	\section{Uživatelská příručka}
+	Program lze přeložit a sestavit pomocí standardního C/C++ překladače (gcc, cl).
+	
+	Při sestavení musí mít linker přístup k tbb a opencl. 
+	
+	Použití: program.exe ref enc 
+	
+	Pro vyzkoušení s/bez paralelizmu nutné překompilovat.
+	
+
 	
 	\section{Závěr}
+	Šifru se nepodařilo prolomit, vyzkoušel jsem si paralelizaci, OpenCL se mi nepodařilo naimplementovat tak, aby to zrychlovalo.
 	
 	\begin{thebibliography}{9}
 		\bibitem{hlavacek_de}

@@ -97,6 +97,10 @@
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
       <ConformanceMode>true</ConformanceMode>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <ControlFlowGuard>false</ControlFlowGuard>
+      <EnableEnhancedInstructionSet>StreamingSIMDExtensions2</EnableEnhancedInstructionSet>
+      <CallingConvention>VectorCall</CallingConvention>
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>D:\tools\develop\cuda\develop\lib\x64\;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
