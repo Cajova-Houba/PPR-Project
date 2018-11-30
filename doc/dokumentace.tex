@@ -93,9 +93,9 @@
 	
 	
 	\subsection{Paralelizace}
-	K paralelizace mého řešení jsem postupně využil tři technologie: vektorové instrukce, knihovnu Intel TBB a knihovnu OpenCL. 
+	Výpočetně nejnáročnější část algoritmu je (kromě fitness funkce, která vytváří klíč a dešifruje) mutační funkce. Proto jsem s paralelizací začal právě v tomto místě. K tomu jsem postupně využil tři technologie: vektorové instrukce, knihovnu Intel TBB a knihovnu OpenCL. 
 	
-	\paragraph{Vektorové instrukce} Procesor v mém počítači podporuje vektorové instrukce SSE 2 a nižší. Tyto instrukce využívájí vektor délky 128 bitů. Do tohoto vektoru se vejde 16 bytů, což by při maximální délce hesla 10 bytů bylo dostačující, nicméně mutace \textit{best-2} vyžaduje násobení floatem. Nejmenší float, který lze do vektoru uložit zabírá 32 bitů (do vektoru se tedy vejdou jen 3), aby bylo možné vektorové instrukce v mutační funkci použít, je tedy nutné každý 1 byte hesla roztáhnout na 32 bitů, provést potřebné operace a poté jej z 32 bitů převézt zpátky na 8 bitů. Tato nadbytečná režie způsobila neefektivnost vektorových instrukcí a proto jsem je v mutační funkci nakonec nepoužil.
+	\paragraph{Vektorové instrukce} Procesor v mém počítači podporuje vektorové instrukce SSE 2 a nižší. Tyto instrukce využívájí vektor délky 128 bitů. Do tohoto vektoru se vejde 16 bytů, což by při maximální délce hesla 10 bytů bylo dostačující, nicméně mutace \textit{best-2} vyžaduje násobení floatem. Nejmenší float, který lze do vektoru uložit zabírá 32 bitů, do vektoru se tedy vejdou jen 3. Aby bylo možné vektorové instrukce v mutační funkci použít, je tedy nutné každý 1 byte hesla roztáhnout na 32 bitů, provést potřebné operace a poté jej z 32 bitů převézt zpátky na 8 bitů. Tato nadbytečná režie způsobila neefektivnost vektorových instrukcí a proto jsem je v mutační funkci nakonec nepoužil.
 
 	\subsubsection{Intel TBB}
 	Intel TBB je knihovna pro jazyk C++ sloužící k paralelizacei programů.

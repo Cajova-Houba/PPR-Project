@@ -11,12 +11,13 @@
 #include <bitset>
 #include <cstdio>
 #include <functional>
+#include <map>
 
 // vectors
 #include <emmintrin.h>
 
 // intel TBB
-//#include <tbb/tbb.h>
+#include <tbb/tbb.h>
 
 // opencl
 #include <CL/cl.hpp>
@@ -26,7 +27,7 @@
 //===============================================
 // Declaration of functions used by ApplyEvolutionStep.
 void pick_four_random(int* r1, int* r2, int* r3, int* r4);
-void process_individual(TPassword& res, TPassword& individual, const TPassword& v1, const TPassword& v2, const TPassword& v3, const TPassword& v4, const TPassword& vb);
+void process_individual(TPassword& res, TPassword& individual, const TPassword& v1, const TPassword& v2, const TPassword& v3, const TPassword& v4, const TPassword& vb, const int curr_index, double * score_map);
 
 //
 // Functor for tbb::parallel_for. Performs 
@@ -34,11 +35,11 @@ void process_individual(TPassword& res, TPassword& individual, const TPassword& 
 //
 class ApplyEvolutionStep {
 public:
-	ApplyEvolutionStep(TPassword population[], TPassword new_population[], TPassword& best_vector) :
-		population(population), new_population(new_population), best_vector(best_vector)
+	ApplyEvolutionStep(TPassword population[], TPassword new_population[], TPassword& best_vector, double score_map[], const int best_individual_index) :
+		population(population), new_population(new_population), best_vector(best_vector), score_map(score_map),  best_individual_index(best_individual_index)
 	{}
 
-	/*void operator() (const tbb::blocked_range<size_t>& r) const {
+	void operator() (const tbb::blocked_range<size_t>& r) const {
 		int rand1, rand2, rand3, rand4;
 		TPassword* randomly_picked_1;
 		TPassword* randomly_picked_2;
@@ -60,14 +61,18 @@ public:
 				*randomly_picked_2,
 				*randomly_picked_3,
 				*randomly_picked_4,
-				best_vector);
+				best_vector,
+				best_individual_index,
+				score_map);
 		}
-	}*/
+	}
 
 private:
 	TPassword *const population;
 	TPassword *const new_population;
 	const TPassword& best_vector;
+	double * const score_map;
+	const int best_individual_index;
 };
 
 
@@ -106,7 +111,7 @@ const int NP = 416 * D;
 //const int NP = 7;
 
 // max number of generations
-const double GENERATIONS = 800;
+const double GENERATIONS = 500;
 //===============================================
 
 
@@ -116,8 +121,10 @@ const double GENERATIONS = 800;
 //===============================================
 //
 // program control
+// USE_PARALLEL -> TBB is used
+// USE_PARALLEL + USE_OPENCL -> OpenCL is used
 const bool USE_PARALLEL = true;
-const bool USE_OPENCL = true;
+const bool USE_OPENCL = false;
 const bool PRINT_KEY = false;
 const bool PRINT_BEST = false;
 
@@ -257,15 +264,28 @@ void generate_individual(TPassword& guy) {
 
 
 //
-//	Generate first population of DE algorithm.
+//	Generate first population of DE algorithm. Fills score map
+//	and returns index of the best individual.
 //
-void create_first_population(TPassword *population) {
+int create_first_population(TPassword *population, double* score_map) {
 	int i = 0;
+	double best_f = 0;
+	double tmp = 0;
+	int bi = -1;
 
 	for ( i = 0; i < NP; i++)
 	{
 		generate_individual(population[i]);
+		tmp = fitness_bit_diff(population[i]);
+		score_map[i] = tmp;
+		if (bi == -1 || tmp > best_f) {
+			best_f = tmp;
+			bi = i;
+		}
 	}
+	
+
+	return bi;
 }
 
 
@@ -377,14 +397,14 @@ void pick_four_random(int* r1, int* r2, int* r3, int* r4) {
 //
 //	Performs evolution of one individual. Result (either old individual or new individual) is copied to res.
 //
-void process_individual(TPassword& res, TPassword& individual, const TPassword& v1, const TPassword& v2, const TPassword& v3, const TPassword& v4, const TPassword& vb) {
+void process_individual(TPassword& res, TPassword& individual, const TPassword& v1, const TPassword& v2, const TPassword& v3, const TPassword& v4, const TPassword& vb, const int curr_index, double * score_map) {
 	TPassword noise_vec{};
 	TPassword res_vec{};
 	double individual_score = 0,
 		new_score = 0;
 
 	// fitness of the current individual
-	individual_score = fitness_bit_diff(individual);
+	individual_score = score_map[curr_index];
 
 	// evolution = mutation + cross
 	mutation_best_2(noise_vec, vb,
@@ -395,6 +415,7 @@ void process_individual(TPassword& res, TPassword& individual, const TPassword& 
 	new_score = fitness_bit_diff(res_vec);
 	if (new_score > individual_score) {
 		copy_individual(res, res_vec);
+		score_map[curr_index] = new_score;
 	}
 	else {
 		copy_individual(res, individual);
@@ -403,10 +424,15 @@ void process_individual(TPassword& res, TPassword& individual, const TPassword& 
 
 
 //
-//	Performs evolution over population while using opencl.
+//	Performs evolution over population while using opencl. 
+//	current_best_index is expected to point to the index of the best individual in current population.
+//		After this function returns, value it points to will be set to the index of the best individual in new population. 
+//	score_map is expected to contain fitnesses of the current population.
+//		After this function returns, it will contain fitnesses of the new population.
+//
 //	Returns CL_SUCCESS if everything is OK, otherwise returns error num.
 //
-signed __int32 evolution_opencl(TPassword* population, TPassword* new_population, CL_DATA cl_data) {
+signed __int32 evolution_opencl(TPassword* population, TPassword* new_population, CL_DATA cl_data, int* current_best_index, double* score_map) {
 	size_t i = 0, j = 0;
 
 	// arrays for opencl buffers
@@ -423,9 +449,12 @@ signed __int32 evolution_opencl(TPassword* population, TPassword* new_population
 	cl_int err;
 	TPassword tmp;
 
+	// new best
+	int new_best = -1;
+	double new_best_score = 0;
+	double tmp_score = 0;
+
 	// best and random indexes
-	double best_fitness = 0;
-	int best_index = 0;
 	int rand1, rand2, rand3, rand4;
 
 	size_t global_item_size = NP;
@@ -434,11 +463,11 @@ signed __int32 evolution_opencl(TPassword* population, TPassword* new_population
 	// score for comparing results
 	double curr_score = 0, new_score = 0;
 
-	// fill source arrays
-	find_best_individual(population, &best_index, &best_fitness);
 	if (PRINT_BEST) {
-		print_key(population[best_index], best_fitness);
+		print_key(population[*current_best_index], score_map[*current_best_index]);
 	}
+
+	// fill source arrays
 	for (i = 0; i < NP; i++)
 	{
 		pick_four_random(&rand1, &rand2, &rand3, &rand4);
@@ -449,7 +478,6 @@ signed __int32 evolution_opencl(TPassword* population, TPassword* new_population
 			v2[i * 10 + j] = population[rand2][j];
 			v3[i * 10 + j] = population[rand3][j];
 			v4[i * 10 + j] = population[rand4][j];
-			//best[i * 10 + j] = best[j];
 		}
 	}
 
@@ -480,7 +508,7 @@ signed __int32 evolution_opencl(TPassword* population, TPassword* new_population
 		std::cout << "Error while creating buffer for v4." << std::endl;
 		return err;
 	}
-	cl::Buffer best_buff(*cl_data.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(TPassword*), population[best_index], &err);
+	cl::Buffer best_buff(*cl_data.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(TPassword*), population[*current_best_index], &err);
 	cl::Buffer cr_buff(*cl_data.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(double*), (void *)&CR, &err);
 	cl::Buffer f_buff(*cl_data.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(double*), (void *)&F, &err);
 	cl::Buffer crs_buff(*cl_data.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, ARRAY_LEN * sizeof(double), crs, &err);
@@ -526,15 +554,27 @@ signed __int32 evolution_opencl(TPassword* population, TPassword* new_population
 	{
 		// (res[i*10]) is effectively same as TPassword
 		// compare scores and decide what to keep in new population
-		curr_score = fitness_bit_diff(population[i]);
+		curr_score = score_map[i];
 		new_score = fitness_bit_diff(&(res[i*10]));
 		if (new_score > curr_score) {
 			copy_individual(new_population[i], &(res[i*10]));
+			score_map[i] = new_score;
+			tmp_score = new_score;
 		}
 		else {
 			copy_individual(new_population[i], population[i]);
+			tmp_score = curr_score;
+		}
+
+		// also search for the best individual in new population
+		if (new_best == -1 || new_best_score < tmp_score) {
+			new_best = i;
+			new_best_score = tmp_score;
 		}
 	}
+
+	// update best individual index
+	(*current_best_index) = new_best;
 
 	return CL_SUCCESS;
 }
@@ -543,25 +583,27 @@ signed __int32 evolution_opencl(TPassword* population, TPassword* new_population
 //
 //	Performs evolution over population array while using parallelism.
 //
-void evolution_parallel(TPassword* population, TPassword* new_population) {
+void evolution_parallel(TPassword* population, TPassword* new_population, int* current_best_index, double* score_map) {
 	double best_fitness = 0;
 	int best_index = 0;
 
-	find_best_individual(population, &best_index, &best_fitness);
-
-	//tbb::parallel_for(tbb::blocked_range<size_t>(0, NP), 
-	//	ApplyEvolutionStep(population, new_population, population[best_index])
-	//);
+	tbb::parallel_for(tbb::blocked_range<size_t>(0, NP), 
+		ApplyEvolutionStep(population, new_population, population[*current_best_index], score_map, *current_best_index)
+	);
 }
 
 
 //
 //	Performs one cycle of evolution over given population. Encrypted and reference blocks are used
 //	for calculating fitness function.
+//	current_best_index is expected to point to the index of the best individual in current population.
+//		After this function returns, value it points to will be set to the index of the best individual in new population. 
+//	score_map is expected to contain fitnesses of the current population.
+//		After this function returns, it will contain fitnesses of the new population.
 //
 //	New population is stored to new_population. 
 //
-void evolution(TPassword* population, TPassword* new_population) {
+void evolution(TPassword* population, TPassword* new_population, int* current_best_index, double* score_map) {
 	int i = 0;
 	int rand1, rand2, rand3, rand4;
 	TPassword* active_individual;
@@ -576,14 +618,10 @@ void evolution(TPassword* population, TPassword* new_population) {
 	double active_score = 0;
 	int best_index = -1;
 	double best_fitness = 0;
-
-
-	// find best individual in current population
-	// possible optimization here
-	find_best_individual(population, &best_index, &best_fitness);
+	double tmp_score = 0;
 
 	if (PRINT_BEST) {
-		print_key((population[best_index]), best_fitness);
+		print_key((population[*current_best_index]), score_map[*current_best_index]);
 	}
 
 	for (i = 0; i < NP; i++)
@@ -599,7 +637,7 @@ void evolution(TPassword* population, TPassword* new_population) {
 		randomly_picked_4 = &(population[rand4]);
 
 		
-		mutation_best_2(noise_vector, population[best_index], *randomly_picked_1, *randomly_picked_2, *randomly_picked_3, *randomly_picked_4);
+		mutation_best_2(noise_vector, population[*current_best_index], *randomly_picked_1, *randomly_picked_2, *randomly_picked_3, *randomly_picked_4);
 
 		// cross
 		//	1. y = cross noise_vector (v) with active individual (x_i) (by CR parameter)
@@ -609,16 +647,26 @@ void evolution(TPassword* population, TPassword* new_population) {
 		// evaluate fitness(y)
 		// if (fitness(y) > fitness(active_individual)) -> y || active_individual
 		new_score = fitness_bit_diff(crossed_vector);
-		active_score = fitness_bit_diff(*active_individual);
+		active_score = score_map[i];
 		if (new_score > active_score) {
 			// use crossed_vector for new population
 			copy_individual(new_population[i], crossed_vector);
+			score_map[i] = new_score;
+			tmp_score = new_score;
 		}
 		else {
 			// use active_score for new population
 			copy_individual(new_population[i], *active_individual);
+			tmp_score = active_score;
+		}
+
+		if (best_index == -1 || tmp_score > best_fitness) {
+			best_index = i;
+			best_fitness = tmp_score;
 		}
 	}
+
+	*current_best_index = best_index;
 }
 //===============================================
 #pragma endregion
@@ -700,103 +748,75 @@ void clean_opencl(CL_DATA* data) {
 //	Cipher breaker.
 //
 bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &password) {
-	SJ_context context;
-	TBlock decrypted;
-	TPassword testing_key{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-	int i = 0, j=0;
 	int generation = 0;
 	bool done = false;
+
+	// two array for population and
+	// pointers to switch between them 
+	// each evolution loop
 	TPassword population1[NP] {0};
 	TPassword population2[NP] {0};
 	TPassword *pop = population1;
 	TPassword *new_pop = population2;
-	//std::function<double(TPassword&)> fitness_lambda = [](TPassword& psw) {return fitness_custom_linear(psw, *reference_password); };
-	std::function<double(TPassword&)> fitness_lambda = [](TPassword& psw) {return fitness_bit_diff(psw); };
-	//std::function<double(TPassword&)> fitness_lambda = [&encrypted, &reference](TPassword& psw) {return fitness(psw, encrypted, reference); };
-	encrypted_block = &encrypted;
-	reference_block = &reference;
+
+	// for openCL
 	CL_DATA cl_data;
 	cl_int res;
 
+	// fitness of the best individual (in current generation)
+	double score_map[NP]{};
+	int best_individual_index = 0;
 
-	// pointer to evolution function
-	void(*evolution_function)(TPassword*, TPassword*);
+	// fitness of the best individual in whole evolution
+	double global_best = 0;
 
-	if (USE_PARALLEL) {
-		if (USE_OPENCL) {
-			res = initialize_opencl(&cl_data);
-			if (res != CL_SUCCESS) {
-				std::cout << "Failed to initialize opencl data." << std::to_string(res) << std::endl;
-				clean_opencl(&cl_data);
-				return false;
-			}
-		}
-		else {
-			evolution_function = evolution_parallel;
+	// set global encrypted block and reference block
+	// as those are not going to change
+	encrypted_block = &encrypted;
+	reference_block = &reference;
+
+	// initialize OpenCL if needed
+	if (USE_PARALLEL && USE_OPENCL) {
+		res = initialize_opencl(&cl_data);
+		if (res != CL_SUCCESS) {
+			std::cout << "Failed to initialize opencl data." << std::to_string(res) << std::endl;
+			clean_opencl(&cl_data);
+			return false;
 		}
 	}
-	else {
-		evolution_function = evolution;
-	}
 
-
-	//std::cout << "Creating first population " << std::endl;
-	create_first_population(pop);
-	//std::cout << "First population created " << std::endl;
+	// generate first population
+	best_individual_index = create_first_population(pop, score_map);
+	global_best = score_map[best_individual_index];
 
 	// keep evolving till the key is guessed or max number of generations is reached
 	while (generation < GENERATIONS && !done) {
 
-		// try every key in new population
-		// generation mod 2 ifs are used to change between population arrays 
-		for (i = 0; i < NP; i++) {
-
-			// keep switching between population arrays
-			if (generation % 2 == 0) {
-				pop = population1;
-				new_pop = population2;
-			}
-			else {
-				pop = population2;
-				new_pop = population1;
-			}
-
-			if (PRINT_KEY) {
-				print_key(pop[i], fitness_lambda(pop[i]));
-			}
-			makeKey(&context, pop[i], sizeof(TPassword));
-
-			// if the decryption is successfull => bingo
-			decrypt_block(&context, decrypted, encrypted);
-			if (memcmp(decrypted, reference, sizeof(TBlock)) == 0) {
-				memcpy(password, testing_key, sizeof(TPassword));
-				copy_individual(password, pop[i]);
-				//print_key(current_population_array[i], fitness_lambda(current_population_array[i]));
-				//std::cout << "Done in " << std::to_string(generation) << "!" << std::endl;
-				std::cout << std::to_string(generation) << ";";
-				done = true;
-				break;
-			}
+		// if the best_fitness == MAX_BLOCK_BIT_DIFF, it means that the 
+		// block decrypted by individual was same as the reference block
+		if (std::abs(score_map[best_individual_index] - MAX_BLOCK_BIT_DIFF) < 0.001) {
+			done = true;
+			break;
 		}
-
 		
 		if (USE_PARALLEL && USE_OPENCL) {
-			res = evolution_opencl(pop, new_pop, cl_data);
+			res = evolution_opencl(pop, new_pop, cl_data, &best_individual_index, score_map);
 			if (res != CL_SUCCESS) {
 				std::cout << "Error encoutered in generation " << std::to_string(generation) << std::endl;
 				break;
 			}
 		}
 		else if (USE_PARALLEL) {
-			evolution_parallel(pop, new_pop);
+			evolution_parallel(pop, new_pop, &best_individual_index, score_map);
 		}
 		else {
-			evolution(pop, new_pop);
+			evolution(pop, new_pop, &best_individual_index, score_map);
 		}
 		
-		//if (generation % 5 == 0) {
-			//std::cout << "Generation: " << std::to_string(generation) << std::endl;
-		//}
+		// global best
+		if (score_map[best_individual_index] > global_best) {
+			global_best = score_map[best_individual_index];
+		}
 
 		generation++;
 	}
@@ -804,6 +824,14 @@ bool break_the_cipher(TBlock &encrypted, const TBlock &reference, TPassword &pas
 	if (USE_OPENCL) {
 		clean_opencl(&cl_data);
 	}
+
+	if (done) {
+		std::cout << std::to_string(generation) << ";" << std::to_string(global_best) << ";";
+	}
+	else {
+		std::cout << ";" << std::to_string(global_best) << ";";
+	}
+
 	return done;
 }
 //===============================================
